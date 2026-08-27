@@ -1,30 +1,70 @@
 // Parses args, resolves the working directory, and runs the interactive agent.
 import { createInterface } from "node:readline/promises";
 import { chdir, stdin, stdout } from "node:process";
-import { PROVIDER } from "./config.ts";
-import type { Conversation } from "./agent/conversation.ts";
-import { AnthropicAgent } from "./agent/anthropic.ts";
-import { OpenAIAgent } from "./agent/openai.ts";
+import { modelFor, PROVIDER, type Provider } from "./config.ts";
+import { createAgentFactory, type ProviderAgentFactory } from "./agent/factory.ts";
+import { createToolContext } from "./tools/context.ts";
 import { createSessionStore } from "./session/store.ts";
 
 export interface ReplIO {
   /** Prompt for a line; resolves to null at end-of-input. */
   question(prompt: string): Promise<string | null>;
+  write(text: string): void;
   close(): void;
+}
+
+export interface ReplOptions {
+  provider: Provider;
+  createAgent: ProviderAgentFactory;
+  modelFor: (provider: Provider) => string;
 }
 
 /**
  * Interactive read-eval loop. Exits on a blank line or end-of-input without
- * issuing a model call (mirrors the original run_cli contract).
+ * issuing a model call. Slash commands execute locally and are never sent to a
+ * provider.
  */
 export async function runRepl(
-  agent: Conversation,
+  options: ReplOptions,
   io: ReplIO,
 ): Promise<void> {
+  let provider = options.provider;
+  let agent = options.createAgent(provider);
+
   try {
     while (true) {
       const userMessage = await io.question("> ");
       if (!userMessage) return;
+
+      if (userMessage === "/model") {
+        const choice = await io.question(
+          `Provider [anthropic/openai] (current: ${provider}): `,
+        );
+        if (!choice) {
+          io.write("Model selection canceled.\n");
+          continue;
+        }
+
+        const selected = choice.trim().toLowerCase();
+        if (selected !== "anthropic" && selected !== "openai") {
+          io.write("Invalid provider. Choose anthropic or openai.\n");
+          continue;
+        }
+
+        provider = selected;
+        agent = options.createAgent(provider);
+        io.write(
+          `Switched to ${provider} using ${options.modelFor(provider)}. ` +
+            "Conversation context reset.\n",
+        );
+        continue;
+      }
+
+      if (userMessage.startsWith("/")) {
+        io.write(`Unknown command: ${userMessage}. Available commands: /model\n`);
+        continue;
+      }
+
       await agent.runTurn(userMessage);
     }
   } finally {
@@ -42,11 +82,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const rl = createInterface({ input: stdin, output: stdout });
   const io: ReplIO = {
     question: (prompt) => rl.question(prompt).catch(() => null),
+    write: (text) => stdout.write(text),
     close: () => rl.close(),
   };
-  const agent =
-    PROVIDER === "openai"
-      ? new OpenAIAgent({ store })
-      : new AnthropicAgent({ store });
-  await runRepl(agent, io);
+  const createAgent = createAgentFactory({
+    ctx: createToolContext(),
+    store,
+  });
+  await runRepl({ provider: PROVIDER, createAgent, modelFor }, io);
 }

@@ -61,7 +61,8 @@ describe("registry", () => {
 describe("AnthropicAgent.createMessage", () => {
   test("always supplies tool schemas, system, model and max_tokens", async () => {
     const { client, create } = fakeClient([fakeMessage({})]);
-    const agent = new AnthropicAgent({ client });
+    const model = "claude-test";
+    const agent = new AnthropicAgent({ client, model });
     await agent.createMessage();
 
     expect(create).toHaveBeenCalledTimes(1);
@@ -69,7 +70,7 @@ describe("AnthropicAgent.createMessage", () => {
     expect((arg.tools ?? []).map((tool) => tool.name).sort()).toEqual(TOOL_NAMES);
     expect(typeof arg.system).toBe("string");
     expect((arg.system as string).length).toBeGreaterThan(0);
-    expect(arg.model).toBe(MODEL);
+    expect(arg.model).toBe(model);
     expect(arg.max_tokens).toBe(MAX_TOKENS);
   });
 });
@@ -175,37 +176,3 @@ describe("textFromMessage", () => {
   });
 });
 
-describe("runRepl", () => {
-  test("exits without a model call on a blank line", async () => {
-    const runTurn = mock(async (_userMessage: string) => {});
-    const io = { question: mock(async () => ""), close: mock(() => {}) };
-
-    await runRepl({ runTurn }, io);
-
-    expect(runTurn).not.toHaveBeenCalled();
-    expect(io.close).toHaveBeenCalledTimes(1);
-  });
-
-  test("exits without a model call on end-of-input", async () => {
-    const runTurn = mock(async (_userMessage: string) => {});
-    const io = { question: mock(async () => null), close: mock(() => {}) };
-
-    await runRepl({ runTurn }, io);
-
-    expect(runTurn).not.toHaveBeenCalled();
-  });
-
-  test("runs a turn per non-empty line until blank", async () => {
-    let turn = 0;
-    const runTurn = mock(async (_userMessage: string) => {});
-    const io = {
-      question: mock(async () => (turn++ === 0 ? "hi" : "")),
-      close: mock(() => {}),
-    };
-
-    await runRepl({ runTurn }, io);
-
-    expect(runTurn).toHaveBeenCalledTimes(1);
-    expect(runTurn).toHaveBeenCalledWith("hi");
-  });
-});

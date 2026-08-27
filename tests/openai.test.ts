@@ -29,7 +29,8 @@ function fakeClient(responses: Response[]) {
 describe("OpenAIAgent.createResponse", () => {
   test("supplies the selected model, system prompt, output limit, and tool schemas", async () => {
     const { client, create } = fakeClient([fakeResponse({})]);
-    const agent = new OpenAIAgent({ client });
+    const model = "gpt-test";
+    const agent = new OpenAIAgent({ client, model });
 
     await agent.createResponse();
 
@@ -40,7 +41,7 @@ describe("OpenAIAgent.createResponse", () => {
       instructions: string;
       tools: Array<{ name: string; type: string; strict: boolean }>;
     };
-    expect(request.model).toBe(MODEL);
+    expect(request.model).toBe(model);
     expect(request.max_output_tokens).toBe(MAX_TOKENS);
     expect(request.instructions.length).toBeGreaterThan(0);
     expect(request.tools.map((tool) => tool.name).sort()).toEqual([

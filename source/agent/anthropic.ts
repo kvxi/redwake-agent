@@ -15,6 +15,7 @@ import { buildSystemPrompt } from "./system-prompt.ts";
 
 export interface AnthropicAgentOptions extends AgentBaseOptions {
   client?: Anthropic;
+  model?: string;
 }
 
 export function textFromMessage(message: Message): string {
@@ -26,17 +27,19 @@ export function textFromMessage(message: Message): string {
 
 export class AnthropicAgent extends AgentBase<Message, ToolResultBlockParam> {
   private readonly client: Anthropic;
+  private readonly model: string;
   private readonly anthropicTools = toAnthropicTools();
   private readonly messages: MessageParam[] = [];
 
   constructor(options: AnthropicAgentOptions = {}) {
     super(options);
     this.client = options.client ?? new Anthropic();
+    this.model = options.model ?? MODEL;
   }
 
   createMessage(system?: string): Promise<Message> {
     return this.client.messages.create({
-      model: MODEL,
+      model: this.model,
       max_tokens: MAX_TOKENS,
       messages: this.messages,
       system: system ?? buildSystemPrompt(),

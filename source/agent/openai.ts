@@ -15,6 +15,7 @@ import { buildSystemPrompt } from "./system-prompt.ts";
 
 export interface OpenAIAgentOptions extends AgentBaseOptions {
   client?: OpenAI;
+  model?: string;
 }
 
 /** Runs an interactive conversation through the OpenAI Responses API. */
@@ -23,17 +24,19 @@ export class OpenAIAgent extends AgentBase<
   ResponseInputItem.FunctionCallOutput
 > {
   private readonly client: OpenAI;
+  private readonly model: string;
   private readonly openAITools = toOpenAITools();
   private readonly input: ResponseInput = [];
 
   constructor(options: OpenAIAgentOptions = {}) {
     super(options);
     this.client = options.client ?? new OpenAI();
+    this.model = options.model ?? MODEL;
   }
 
   createResponse(system?: string): Promise<Response> {
     return this.client.responses.create({
-      model: MODEL,
+      model: this.model,
       max_output_tokens: MAX_TOKENS,
       input: this.input,
       instructions: system ?? buildSystemPrompt(),

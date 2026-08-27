@@ -30,6 +30,10 @@ bun run source/client.ts /path/to/project          # target another project
 
 Type a message at the `>` prompt; submit an empty line (or Ctrl-D) to exit.
 
+Use `/model` to select Anthropic or OpenAI without sending a model message.
+Changing providers starts a fresh provider-specific conversation while retaining
+the agent's tool state.
+
 ## Test / typecheck
 
 ```sh

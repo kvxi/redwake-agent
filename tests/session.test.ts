@@ -89,10 +89,18 @@ describe("runRepl persistence", () => {
     let asked = 0;
     const io = {
       question: async () => (asked++ === 0 ? "hello" : ""),
+      write: (_text: string) => {},
       close: () => {},
     };
 
-    await runRepl(agent, io);
+    await runRepl(
+      {
+        provider: "anthropic",
+        createAgent: () => agent,
+        modelFor: () => "claude-opus-5",
+      },
+      io,
+    );
 
     const lines = await readSession(store.path);
     expect(lines.map((line) => [line.role, line.parent])).toEqual([
