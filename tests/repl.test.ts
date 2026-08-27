@@ -46,10 +46,25 @@ describe("runRepl slash commands", () => {
     expect(writes).toEqual([
       "\x1b[0m",
       "\x1b[0m",
-      "Switched to openai using gpt-5.6. Conversation context reset.\n",
+      "Switched to openai using gpt-5.6. Conversation retained.\n",
       "\x1b[0m",
       "\x1b[0m",
     ]);
+  });
+
+  test("treats selecting the active provider as a no-op", async () => {
+    const agent = { runTurn: mock(async (_message: string) => {}) };
+    const { options, createAgent } = fakeRuntime({
+      anthropic: agent,
+      openai: { runTurn: mock(async (_message: string) => {}) },
+    });
+    const { io, writes } = fakeIO(["/model", "anthropic", "continue", ""]);
+    await runRepl(options, io);
+    expect(createAgent).toHaveBeenCalledTimes(1);
+    expect(agent.runTurn).toHaveBeenCalledWith("continue");
+    expect(writes).toContain(
+      "Already using anthropic with claude-opus-5. Conversation retained.\n",
+    );
   });
 
   test("cancels model selection without exiting the REPL", async () => {

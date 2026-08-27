@@ -1,10 +1,12 @@
 // Parses args, resolves the working directory, and runs the interactive agent.
 import { createInterface } from "node:readline/promises";
 import { chdir, stdin, stdout } from "node:process";
+import { resolve } from "node:path";
 import { modelFor, PROVIDER, type Provider } from "./config.ts";
 import { createAgentFactory, type ProviderAgentFactory } from "./agent/factory.ts";
 import { createToolContext } from "./tools/context.ts";
-import { createSessionStore } from "./session/store.ts";
+import { createSessionStore, SessionStore } from "./session/store.ts";
+import { ConversationState } from "./session/conversation-state.ts";
 
 export interface ReplIO {
   /** Prompt for a line; resolves to null at end-of-input. */
@@ -61,11 +63,15 @@ export async function runRepl(
           continue;
         }
 
+        if (selected === provider) {
+          io.write(`Already using ${provider} with ${options.modelFor(provider)}. Conversation retained.\n`);
+          continue;
+        }
         provider = selected;
         agent = options.createAgent(provider);
         io.write(
           `Switched to ${provider} using ${options.modelFor(provider)}. ` +
-            "Conversation context reset.\n",
+            "Conversation retained.\n",
         );
         continue;
       }
@@ -83,11 +89,23 @@ export async function runRepl(
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-  const cwd = argv[0];
+  const args = [...argv];
+  const resumeIndex = args.indexOf("--resume");
+  let resumePath: string | undefined;
+  if (resumeIndex >= 0) {
+    resumePath = args[resumeIndex + 1];
+    if (!resumePath) throw new Error("--resume requires a session JSONL path");
+    resumePath = resolve(resumePath);
+    args.splice(resumeIndex, 2);
+  }
+  const cwd = args[0];
   if (cwd) chdir(cwd);
 
-  const store = createSessionStore();
-  stdout.write(`Session: ${store.path}\n`);
+  const store = resumePath
+    ? new SessionStore(resumePath)
+    : createSessionStore();
+  const initialEvents = resumePath ? store.load() : [];
+  stdout.write(`Session: ${store.path}${resumePath ? ` (resumed ${initialEvents.length} events)` : ""}\n`);
 
   const rl = createInterface({ input: stdin, output: stdout });
   const io: ReplIO = {
@@ -95,9 +113,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     write: (text) => stdout.write(text),
     close: () => rl.close(),
   };
+  const conversation = new ConversationState(store, initialEvents);
   const createAgent = createAgentFactory({
     ctx: createToolContext(),
-    store,
+    conversation,
   });
   await runRepl({ provider: PROVIDER, createAgent, modelFor }, io);
 }

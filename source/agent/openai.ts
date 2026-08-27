@@ -12,6 +12,7 @@ import {
   type NormalizedToolCall,
 } from "./base.ts";
 import { buildSystemPrompt } from "./system-prompt.ts";
+import { toOpenAIHistory } from "./history.ts";
 
 export interface OpenAIAgentOptions extends AgentBaseOptions {
   client?: OpenAI;
@@ -26,12 +27,14 @@ export class OpenAIAgent extends AgentBase<
   private readonly client: OpenAI;
   private readonly model: string;
   private readonly openAITools = toOpenAITools();
-  private readonly input: ResponseInput = [];
+  private readonly input: ResponseInput;
 
   constructor(options: OpenAIAgentOptions = {}) {
     super(options);
     this.client = options.client ?? new OpenAI();
     this.model = options.model ?? MODEL;
+    // Roughly 300k tokens, leaving room for system, tools, and output.
+    this.input = toOpenAIHistory(this.conversation.snapshot(1_200_000));
   }
 
   createResponse(system?: string): Promise<Response> {
@@ -65,11 +68,16 @@ export class OpenAIAgent extends AgentBase<
   protected *toolCalls(response: Response): Iterable<NormalizedToolCall> {
     for (const item of response.output) {
       if (item.type !== "function_call") continue;
-      yield {
-        id: item.call_id,
-        name: item.name,
-        decodeInput: () => JSON.parse(item.arguments),
-      };
+      try {
+        yield { id: item.call_id, name: item.name, input: JSON.parse(item.arguments) };
+      } catch (error) {
+        yield {
+          id: item.call_id,
+          name: item.name,
+          input: item.arguments,
+          inputError: error instanceof Error ? error.message : String(error),
+        };
+      }
     }
   }
 
