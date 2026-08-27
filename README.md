@@ -1,6 +1,6 @@
 # redwake-coding-agent
 
-Redwake coding agent. My take on a minimalist coding agent. Right now, running it carrues a mild security risk since sandboxing and hardcoded command allowlist is not yet implemented. The agent can run bash commands with only minimal guard rails. Future roadmap: harden security, TUI with history navigation, auto model usage to imrpove cost efficiency, and multi sub agents. 
+Redwake Coding Agent: My take on a minimalist coding agent. Right now, running it carries a mild security risk since sandboxing and hardcoded command allowlist is not yet implemented. The agent can run bash commands with only minimal guard rails. Future roadmap: harden security, TUI with history navigation, auto model usage to imrpove cost efficiency, and multi sub agents. 
 
 # Cool stuff you can do
 
