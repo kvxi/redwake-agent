@@ -1,9 +1,19 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-// Central runtime configuration. Single source of truth for the model id
-// (previously duplicated/overwritten in loop.py).
-export const MODEL = "claude-opus-5";
+export type Provider = "anthropic" | "openai";
+
+const configuredProvider = process.env.PROVIDER ?? "anthropic";
+if (configuredProvider !== "anthropic" && configuredProvider !== "openai") {
+  throw new Error(`Unsupported provider: ${configuredProvider}`);
+}
+
+/** API provider selected by PROVIDER; defaults to Anthropic for compatibility. */
+export const PROVIDER: Provider = configuredProvider;
+
+/** Model selected by MODEL; defaults to the selected provider's primary model. */
+export const MODEL =
+  process.env.MODEL ?? (PROVIDER === "openai" ? "gpt-5.6" : "claude-opus-5");
 export const MAX_TOKENS = 4096;
 
 // Session-store root: ~/redwake/agent/sessions (per memory_sessions_plan.md).

@@ -1,9 +1,11 @@
 // Parses args, resolves the working directory, and runs the interactive agent.
 import { createInterface } from "node:readline/promises";
 import { chdir, stdin, stdout } from "node:process";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
-import { Agent, type Conversation } from "./agent/loop.ts";
-import { createSessionStore, type SessionStore } from "./session/store.ts";
+import { PROVIDER } from "./config.ts";
+import type { Conversation } from "./agent/conversation.ts";
+import { AnthropicAgent } from "./agent/anthropic.ts";
+import { OpenAIAgent } from "./agent/openai.ts";
+import { createSessionStore } from "./session/store.ts";
 
 export interface ReplIO {
   /** Prompt for a line; resolves to null at end-of-input. */
@@ -18,17 +20,12 @@ export interface ReplIO {
 export async function runRepl(
   agent: Conversation,
   io: ReplIO,
-  store?: SessionStore,
 ): Promise<void> {
-  const messages: MessageParam[] = [];
   try {
     while (true) {
       const userMessage = await io.question("> ");
       if (!userMessage) return;
-      const message: MessageParam = { role: "user", content: userMessage };
-      messages.push(message);
-      store?.append(message);
-      await agent.runTurn(messages);
+      await agent.runTurn(userMessage);
     }
   } finally {
     io.close();
@@ -47,5 +44,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     question: (prompt) => rl.question(prompt).catch(() => null),
     close: () => rl.close(),
   };
-  await runRepl(new Agent({ store }), io, store);
+  const agent =
+    PROVIDER === "openai"
+      ? new OpenAIAgent({ store })
+      : new AnthropicAgent({ store });
+  await runRepl(agent, io);
 }

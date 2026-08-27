@@ -1,1 +1,1 @@
-Include current date in final response.
+Mark the end of response with: "finished up."

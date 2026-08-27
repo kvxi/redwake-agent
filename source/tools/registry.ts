@@ -1,4 +1,5 @@
 import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages";
+import type { FunctionTool as OpenAIFunctionTool } from "openai/resources/responses/responses";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { ToolError, type AnyTool, type ToolContext } from "./context.ts";
 import { readTool } from "./read.ts";
@@ -33,6 +34,25 @@ export function toAnthropicTools(): AnthropicTool[] {
       name: tool.name,
       description: tool.description,
       input_schema: jsonSchema as AnthropicTool.InputSchema,
+    };
+  });
+}
+
+/** OpenAI Responses function tools derived from each Zod schema. */
+export function toOpenAITools(): OpenAIFunctionTool[] {
+  return tools.map((tool) => {
+    const parameters = zodToJsonSchema(tool.schema, {
+      $refStrategy: "none",
+    }) as Record<string, unknown>;
+    delete parameters.$schema;
+    return {
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      parameters,
+      // Existing schemas expose optional/defaulted fields, which strict mode
+      // rejects. runTool remains the authoritative input validator.
+      strict: false,
     };
   });
 }

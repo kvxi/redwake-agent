@@ -1,9 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Message, MessageParam } from "@anthropic-ai/sdk/resources/messages";
-import { Agent, textFromMessage } from "../source/agent/loop.ts";
+import { AnthropicAgent, textFromMessage } from "../source/agent/anthropic.ts";
 import { buildSystemPrompt } from "../source/agent/system-prompt.ts";
-import { toAnthropicTools } from "../source/tools/registry.ts";
+import {
+  toAnthropicTools,
+  toOpenAITools,
+} from "../source/tools/registry.ts";
 import { createToolContext } from "../source/tools/context.ts";
 import { runRepl } from "../source/main.ts";
 import { MAX_TOKENS, MODEL } from "../source/config.ts";
@@ -25,34 +28,45 @@ function fakeMessage(partial: Partial<Message>): Message {
 }
 
 function fakeClient(responses: Message[]) {
-  const create = mock(async (_params: Anthropic.MessageCreateParams) =>
-    responses.shift(),
-  );
+  const calls: Anthropic.MessageCreateParams[] = [];
+  const create = mock(async (params: Anthropic.MessageCreateParams) => {
+    calls.push(structuredClone(params));
+    return responses.shift();
+  });
   const client = { messages: { create } } as unknown as Anthropic;
-  return { client, create };
+  return { client, create, calls };
 }
+
 describe("registry", () => {
-  test("exposes exactly the six tools with generated schemas", () => {
-    const schemas = toAnthropicTools();
-    expect(schemas.map((s) => s.name).sort()).toEqual(TOOL_NAMES);
-    const fetchSchema = schemas.find((s) => s.name === "fetch");
+  test("derives Anthropic and OpenAI schemas from the same tools", () => {
+    const anthropicSchemas = toAnthropicTools();
+    expect(anthropicSchemas.map((s) => s.name).sort()).toEqual(TOOL_NAMES);
+    const fetchSchema = anthropicSchemas.find((s) => s.name === "fetch");
     const properties = fetchSchema?.input_schema.properties as Record<
       string,
       { minimum?: number }
     >;
     expect(properties.offset?.minimum).toBe(0);
+
+    const openAISchemas = toOpenAITools();
+    expect(openAISchemas.map((s) => s.name).sort()).toEqual(TOOL_NAMES);
+    expect(openAISchemas.every((schema) => schema.type === "function")).toBe(true);
+    expect(openAISchemas.every((schema) => schema.strict === false)).toBe(true);
+    expect(openAISchemas.find((schema) => schema.name === "fetch")?.parameters).toEqual(
+      fetchSchema?.input_schema,
+    );
   });
 });
 
-describe("createMessage", () => {
+describe("AnthropicAgent.createMessage", () => {
   test("always supplies tool schemas, system, model and max_tokens", async () => {
     const { client, create } = fakeClient([fakeMessage({})]);
-    const agent = new Agent({ client });
-    await agent.createMessage([{ role: "user", content: "hi" }]);
+    const agent = new AnthropicAgent({ client });
+    await agent.createMessage();
 
     expect(create).toHaveBeenCalledTimes(1);
     const arg = create.mock.calls[0]![0] as Anthropic.MessageCreateParams;
-    expect((arg.tools ?? []).map((t) => t.name).sort()).toEqual(TOOL_NAMES);
+    expect((arg.tools ?? []).map((tool) => tool.name).sort()).toEqual(TOOL_NAMES);
     expect(typeof arg.system).toBe("string");
     expect((arg.system as string).length).toBeGreaterThan(0);
     expect(arg.model).toBe(MODEL);
@@ -72,25 +86,23 @@ describe("buildSystemPrompt", () => {
   });
 });
 
-describe("runTurn", () => {
+describe("AnthropicAgent.runTurn", () => {
   test("records and prints a final response", async () => {
-    const { client, create } = fakeClient([
+    const { client, create, calls } = fakeClient([
       fakeMessage({
         content: [{ type: "text", text: "Completed" }],
         stop_reason: "end_turn",
       }) as Message,
     ]);
     const printed: string[] = [];
-    const agent = new Agent({ client, print: (t) => printed.push(t) });
-    const messages: MessageParam[] = [{ role: "user", content: "hi" }];
+    const agent = new AnthropicAgent({ client, print: (text) => printed.push(text) });
 
-    const response = await agent.runTurn(messages);
+    await agent.runTurn("hi");
 
     expect(create).toHaveBeenCalledTimes(1);
-    expect(response.stop_reason).toBe("end_turn");
     expect(printed).toEqual(["Completed"]);
-    expect(messages).toHaveLength(2);
-    expect(messages[1]!.role).toBe("assistant");
+    const request = calls[0]!;
+    expect(request.messages).toEqual([{ role: "user", content: "hi" }]);
   });
 
   test("continues after tool_use and appends tool results", async () => {
@@ -104,14 +116,19 @@ describe("runTurn", () => {
       content: [{ type: "text", text: "done" }],
       stop_reason: "end_turn",
     });
-    const { client, create } = fakeClient([toolUse, final]);
-    const agent = new Agent({ client, ctx: createToolContext(), print: () => {} });
-    const messages: MessageParam[] = [{ role: "user", content: "go" }];
+    const { client, create, calls } = fakeClient([toolUse, final]);
+    const agent = new AnthropicAgent({
+      client,
+      ctx: createToolContext(),
+      print: () => {},
+    });
 
-    await agent.runTurn(messages);
+    await agent.runTurn("go");
 
     expect(create).toHaveBeenCalledTimes(2);
-    expect(messages).toHaveLength(4); // user, assistant(tool_use), user(tool_result), assistant
+    const secondRequest = calls[1]!;
+    const messages = secondRequest.messages as MessageParam[];
+    expect(messages).toHaveLength(3); // user, assistant(tool_use), user(tool_result)
     const toolResults = messages[2]!.content as Array<{
       type: string;
       is_error: boolean;
@@ -123,7 +140,7 @@ describe("runTurn", () => {
   });
 });
 
-describe("runTools", () => {
+describe("AnthropicAgent.runTools", () => {
   test("serializes successes and errors independently", async () => {
     const message = fakeMessage({
       content: [
@@ -131,7 +148,7 @@ describe("runTools", () => {
         { type: "tool_use", id: "b", name: "nope", input: {} },
       ],
     });
-    const agent = new Agent({ client: fakeClient([]).client });
+    const agent = new AnthropicAgent({ client: fakeClient([]).client });
 
     const results = await agent.runTools(message);
 
@@ -160,20 +177,17 @@ describe("textFromMessage", () => {
 
 describe("runRepl", () => {
   test("exits without a model call on a blank line", async () => {
-    let turns = 0;
-    const agent = { runTurn: async () => fakeMessage({}) };
-    const runTurn = mock(agent.runTurn);
+    const runTurn = mock(async (_userMessage: string) => {});
     const io = { question: mock(async () => ""), close: mock(() => {}) };
 
     await runRepl({ runTurn }, io);
 
     expect(runTurn).not.toHaveBeenCalled();
     expect(io.close).toHaveBeenCalledTimes(1);
-    void turns;
   });
 
   test("exits without a model call on end-of-input", async () => {
-    const runTurn = mock(async () => fakeMessage({}));
+    const runTurn = mock(async (_userMessage: string) => {});
     const io = { question: mock(async () => null), close: mock(() => {}) };
 
     await runRepl({ runTurn }, io);
@@ -182,15 +196,16 @@ describe("runRepl", () => {
   });
 
   test("runs a turn per non-empty line until blank", async () => {
-    let n = 0;
-    const runTurn = mock(async () => fakeMessage({}));
+    let turn = 0;
+    const runTurn = mock(async (_userMessage: string) => {});
     const io = {
-      question: mock(async () => (n++ === 0 ? "hi" : "")),
+      question: mock(async () => (turn++ === 0 ? "hi" : "")),
       close: mock(() => {}),
     };
 
     await runRepl({ runTurn }, io);
 
     expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledWith("hi");
   });
 });

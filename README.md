@@ -9,8 +9,10 @@ Edit source/custom_system.md to change the behavior of the agent. The default sy
 ## Requirements
 
 - Bun >= 1.4
-- `ANTHROPIC_API_KEY` (required) and `BRAVE_SEARCH_API_KEY` (only for the
-  `search` tool) available in the environment or a local `.env` file.
+- `ANTHROPIC_API_KEY` for `PROVIDER=anthropic` (default), or `OPENAI_API_KEY`
+  for `PROVIDER=openai`, available in the environment or the repository-root
+  `.env` file.
+- `BRAVE_SEARCH_API_KEY` only when the `search` tool is needed.
 
 ## Setup
 
@@ -21,8 +23,9 @@ bun install
 ## Run
 
 ```sh
-bun run start            # start the interactive agent in the current directory
-bun run source/client.ts /path/to/project   # or point it at another directory
+bun run start                                      # Anthropic (default)
+PROVIDER=openai MODEL=gpt-5.6 bun run start        # OpenAI
+bun run source/client.ts /path/to/project          # target another project
 ```
 
 Type a message at the `>` prompt; submit an empty line (or Ctrl-D) to exit.

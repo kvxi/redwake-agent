@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Message, MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import {
   createSessionStore,
   type SessionMessage,
@@ -34,8 +33,8 @@ describe("SessionStore", () => {
     store.append({ role: "user", content: "bye" });
 
     const lines = await readSession(store.path);
-    expect(lines.map((l) => l.id)).toEqual([0, 1, 2]);
-    expect(lines.map((l) => l.parent)).toEqual([null, 0, 1]);
+    expect(lines.map((line) => line.id)).toEqual([0, 1, 2]);
+    expect(lines.map((line) => line.parent)).toEqual([null, 0, 1]);
     expect(lines[0]).toEqual({
       id: 0,
       parent: null,
@@ -45,15 +44,12 @@ describe("SessionStore", () => {
     expect(lines[1]!.role).toBe("assistant");
   });
 
-  test("preserves structured (block) content", async () => {
-    const store = createSessionStore("/proj/blocks", root);
-    const content: MessageParam["content"] = [
-      { type: "tool_result", tool_use_id: "t1", content: "{}", is_error: false },
-    ];
-    store.append({ role: "user", content });
+  test("stores provider-neutral text messages", async () => {
+    const store = createSessionStore("/proj/messages", root);
+    store.append({ role: "assistant", content: "tool results summarized" });
 
     const [line] = await readSession(store.path);
-    expect(line!.message).toEqual(content);
+    expect(line!.message).toBe("tool results summarized");
   });
 });
 
@@ -81,20 +77,12 @@ describe("createSessionStore", () => {
 });
 
 describe("runRepl persistence", () => {
-  test("records user, assistant and tool_result in order", async () => {
+  test("leaves provider-owned persistence in user and assistant order", async () => {
     const store = createSessionStore("/proj/int", root);
-    const fakeMessage = {} as unknown as Message;
     const agent = {
-      // simulate what Agent.runTurn appends via the shared store
-      runTurn: async (_messages: MessageParam[]) => {
+      runTurn: async (userMessage: string) => {
+        store.append({ role: "user", content: userMessage });
         store.append({ role: "assistant", content: "answer" });
-        store.append({
-          role: "user",
-          content: [
-            { type: "tool_result", tool_use_id: "t", content: "{}", is_error: false },
-          ],
-        });
-        return fakeMessage;
       },
     };
 
@@ -104,13 +92,12 @@ describe("runRepl persistence", () => {
       close: () => {},
     };
 
-    await runRepl(agent, io, store);
+    await runRepl(agent, io);
 
     const lines = await readSession(store.path);
-    expect(lines.map((l) => [l.role, l.parent])).toEqual([
+    expect(lines.map((line) => [line.role, line.parent])).toEqual([
       ["user", null],
       ["assistant", 0],
-      ["user", 1],
     ]);
     expect(lines[0]!.message).toBe("hello");
   });

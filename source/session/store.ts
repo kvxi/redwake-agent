@@ -1,7 +1,14 @@
 import { appendFileSync, mkdirSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import { SESSIONS_ROOT } from "../config.ts";
+
+export type ConversationRole = "user" | "assistant";
+
+/** Provider-neutral public conversation message. */
+export interface ConversationMessage {
+  role: ConversationRole;
+  content: string;
+}
 
 /**
  * One persisted conversation message. `parent` links to the previous message's
@@ -11,8 +18,8 @@ import { SESSIONS_ROOT } from "../config.ts";
 export interface SessionMessage {
   id: number;
   parent: number | null;
-  role: MessageParam["role"];
-  message: MessageParam["content"];
+  role: ConversationRole;
+  message: string;
 }
 
 /** Append-only JSONL writer for a single session file. */
@@ -23,7 +30,7 @@ export class SessionStore {
   constructor(readonly path: string) {}
 
   /** Persist one message, chaining `parent` to the previously written message. */
-  append(message: MessageParam): void {
+  append(message: ConversationMessage): void {
     const record: SessionMessage = {
       id: this.nextId,
       parent: this.lastId,
