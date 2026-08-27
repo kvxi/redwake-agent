@@ -8,6 +8,7 @@ import { MAX_TOKENS, MODEL } from "../config.ts";
 import { buildSystemPrompt } from "./system-prompt.ts";
 import { runTool, toAnthropicTools } from "../tools/registry.ts";
 import { createToolContext, type ToolContext } from "../tools/context.ts";
+import type { SessionStore } from "../session/store.ts";
 
 /** Minimal REPL-facing surface, so the CLI can be driven with a fake agent. */
 export interface Conversation {
@@ -18,6 +19,7 @@ export interface AgentOptions {
   client?: Anthropic;
   ctx?: ToolContext;
   print?: (text: string) => void;
+  store?: SessionStore;
 }
 
 export function textFromMessage(message: Message): string {
@@ -31,12 +33,14 @@ export class Agent implements Conversation {
   private readonly client: Anthropic;
   private readonly ctx: ToolContext;
   private readonly print: (text: string) => void;
+  private readonly store: SessionStore | undefined;
   private readonly anthropicTools = toAnthropicTools();
 
   constructor(options: AgentOptions = {}) {
     this.client = options.client ?? new Anthropic();
     this.ctx = options.ctx ?? createToolContext();
     this.print = options.print ?? ((text) => console.log(text));
+    this.store = options.store;
   }
 
   createMessage(messages: MessageParam[], system?: string): Promise<Message> {
@@ -77,14 +81,24 @@ export class Agent implements Conversation {
   async runTurn(messages: MessageParam[]): Promise<Message> {
     while (true) {
       const response = await this.createMessage(messages);
-      messages.push({ role: "assistant", content: response.content });
+      const assistant: MessageParam = {
+        role: "assistant",
+        content: response.content,
+      };
+      messages.push(assistant);
+      this.store?.append(assistant);
 
       const text = textFromMessage(response);
       if (text) this.print(text);
 
       if (response.stop_reason !== "tool_use") return response;
 
-      messages.push({ role: "user", content: await this.runTools(response) });
+      const toolResults: MessageParam = {
+        role: "user",
+        content: await this.runTools(response),
+      };
+      messages.push(toolResults);
+      this.store?.append(toolResults);
     }
   }
 }
