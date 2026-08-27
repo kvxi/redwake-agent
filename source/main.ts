@@ -19,6 +19,10 @@ export interface ReplOptions {
   modelFor: (provider: Provider) => string;
 }
 
+const USER_INPUT_STYLE = "\x1b[1;36m";
+const RESET_STYLE = "\x1b[0m";
+
+
 /**
  * Interactive read-eval loop. Exits on a blank line or end-of-input without
  * issuing a model call. Slash commands execute locally and are never sent to a
@@ -31,13 +35,19 @@ export async function runRepl(
   let provider = options.provider;
   let agent = options.createAgent(provider);
 
+  const question = async (prompt: string): Promise<string | null> => {
+    const answer = await io.question(`${USER_INPUT_STYLE}${prompt}`);
+    io.write(RESET_STYLE);
+    return answer;
+  };
+
   try {
     while (true) {
-      const userMessage = await io.question("> ");
+      const userMessage = await question("> ");
       if (!userMessage) return;
 
       if (userMessage === "/model") {
-        const choice = await io.question(
+        const choice = await question(
           `Provider [anthropic/openai] (current: ${provider}): `,
         );
         if (!choice) {

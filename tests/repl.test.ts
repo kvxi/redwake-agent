@@ -44,7 +44,11 @@ describe("runRepl slash commands", () => {
     expect(anthropic.runTurn).not.toHaveBeenCalled();
     expect(openai.runTurn).toHaveBeenCalledWith("explain this");
     expect(writes).toEqual([
+      "\x1b[0m",
+      "\x1b[0m",
       "Switched to openai using gpt-5.6. Conversation context reset.\n",
+      "\x1b[0m",
+      "\x1b[0m",
     ]);
   });
 
@@ -60,7 +64,13 @@ describe("runRepl slash commands", () => {
 
     expect(createAgent).toHaveBeenCalledTimes(1);
     expect(agent.runTurn).toHaveBeenCalledWith("continue");
-    expect(writes).toEqual(["Model selection canceled.\n"]);
+    expect(writes).toEqual([
+      "\x1b[0m",
+      "\x1b[0m",
+      "Model selection canceled.\n",
+      "\x1b[0m",
+      "\x1b[0m",
+    ]);
   });
 
   test("rejects invalid provider selections locally", async () => {
@@ -75,7 +85,12 @@ describe("runRepl slash commands", () => {
 
     expect(createAgent).toHaveBeenCalledTimes(1);
     expect(agent.runTurn).not.toHaveBeenCalled();
-    expect(writes).toEqual(["Invalid provider. Choose anthropic or openai.\n"]);
+    expect(writes).toEqual([
+      "\x1b[0m",
+      "\x1b[0m",
+      "Invalid provider. Choose anthropic or openai.\n",
+      "\x1b[0m",
+    ]);
   });
 
   test("rejects unknown slash commands without sending them to a model", async () => {
@@ -90,7 +105,9 @@ describe("runRepl slash commands", () => {
 
     expect(agent.runTurn).not.toHaveBeenCalled();
     expect(writes).toEqual([
+      "\x1b[0m",
       "Unknown command: /help. Available commands: /model\n",
+      "\x1b[0m",
     ]);
   });
 
@@ -105,5 +122,24 @@ describe("runRepl slash commands", () => {
     await runRepl(options, io);
 
     expect(agent.runTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe("runRepl prompts", () => {
+  test("colors and bolds input until the line is submitted", async () => {
+    const agent = { runTurn: mock(async (_message: string) => {}) };
+    const { options } = fakeRuntime({
+      anthropic: agent,
+      openai: { runTurn: mock(async (_message: string) => {}) },
+    });
+    const { io, question, writes } = fakeIO(["message", ""]);
+
+    await runRepl(options, io);
+
+    expect(question.mock.calls).toEqual([
+      ["\x1b[1;36m> "],
+      ["\x1b[1;36m> "],
+    ]);
+    expect(writes).toEqual(["\x1b[0m", "\x1b[0m"]);
   });
 });
