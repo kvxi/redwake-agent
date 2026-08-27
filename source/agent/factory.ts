@@ -20,7 +20,7 @@ export function createAgent(
   return new AnthropicAgent(options);
 }
 
-/** Build agents that share runtime state while retaining provider-local history. */
+/** Build uncached agents sharing tool state and the canonical conversation. */
 export function createAgentFactory(
   options: AgentBaseOptions,
   construct: CreateAgent = createAgent,

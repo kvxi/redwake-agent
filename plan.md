@@ -324,3 +324,56 @@ Historical tool activity can initially be omitted or represented as concise text
 ## Key Architectural Decision
 
 The durable source of truth should be a provider-neutral session transcript. Anthropic and OpenAI histories are derived representations used to communicate with their respective APIs, not the primary owner of session context.
+
+## Publishing This Work to an `experimental` Branch
+
+Push the repository to a new branch named `experimental` on `origin`
+(`git@github.com:kvxi/redwake-coding-agent.git`).
+
+### Steps
+
+1. Confirm you are in the repository root and inspect the working tree:
+
+```bash
+cd /Users/act/redwake-coding-agent
+git status
+```
+
+2. Create and switch to the new branch from the current `main` branch:
+
+```bash
+git switch -c experimental
+```
+
+3. Stage and commit any pending work (skip if the tree is already clean):
+
+```bash
+git add -A
+git commit -m "Add seamless model-switching context plan"
+```
+
+4. Push the branch and set its upstream tracking reference:
+
+```bash
+git push -u origin experimental
+```
+
+5. Verify the branch exists remotely and is tracked locally:
+
+```bash
+git branch -vv
+git ls-remote --heads origin experimental
+```
+
+### Notes
+
+- Use `git push -u origin experimental` only the first time; later pushes are
+  just `git push`.
+- If `experimental` already exists on the remote, either pick a different name
+  or reconcile with `git pull --rebase origin experimental` before pushing.
+- Do not force-push (`--force`) to a shared branch; prefer
+  `--force-with-lease` if a rewrite is unavoidable.
+- Keep `main` untouched by this work; open a pull request from `experimental`
+  when the changes are ready for review.
+- Confirm `.env` remains ignored by `.gitignore` so credentials are never
+  pushed.

@@ -12,6 +12,7 @@ import {
   type NormalizedToolCall,
 } from "./base.ts";
 import { buildSystemPrompt } from "./system-prompt.ts";
+import { toAnthropicHistory } from "./history.ts";
 
 export interface AnthropicAgentOptions extends AgentBaseOptions {
   client?: Anthropic;
@@ -29,12 +30,14 @@ export class AnthropicAgent extends AgentBase<Message, ToolResultBlockParam> {
   private readonly client: Anthropic;
   private readonly model: string;
   private readonly anthropicTools = toAnthropicTools();
-  private readonly messages: MessageParam[] = [];
+  private readonly messages: MessageParam[];
 
   constructor(options: AnthropicAgentOptions = {}) {
     super(options);
     this.client = options.client ?? new Anthropic();
     this.model = options.model ?? MODEL;
+    // Roughly 150k tokens, leaving room for system, tools, and output.
+    this.messages = toAnthropicHistory(this.conversation.snapshot(600_000));
   }
 
   createMessage(system?: string): Promise<Message> {
@@ -69,7 +72,7 @@ export class AnthropicAgent extends AgentBase<Message, ToolResultBlockParam> {
       yield {
         id: block.id,
         name: block.name,
-        decodeInput: () => block.input,
+        input: block.input,
       };
     }
   }
