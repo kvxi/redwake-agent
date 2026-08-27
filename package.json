@@ -1,0 +1,24 @@
+{
+  "name": "redwake-coding-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "module": "source/client.ts",
+  "scripts": {
+    "start": "bun run source/client.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "cheerio": "^1.0.0",
+    "turndown": "^7.2.0",
+    "turndown-plugin-gfm": "^1.0.2",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/turndown": "^5.0.5"
+  }
+}
