@@ -1,7 +1,10 @@
 # redwake-coding-agent
 
-A minimal terminal coding agent (Anthropic tool-use loop) written in TypeScript
-and run with [Bun](https://bun.sh).
+Redwake coding agent. My take on a minimalist coding agent. Right now, running it carrues a mild security risk since sandboxing and hardcoded command allowlist is not yet implemented. The agent can run bash commands with only minimal guard rails. Future roadmap: harden security, TUI with history navigation, auto model usage to imrpove cost efficiency, and multi sub agents. 
+
+# Cool stuff you can do
+
+Edit source/custom_system.md to change the behavior of the agent. The default system prompt is minimal and just one small part of the total context which is given to the agent. You can write whatever you want into custom_system.md to unlock new behaviors from the agent or influence its work style.
 
 ## Requirements
 
@@ -30,23 +33,3 @@ Type a message at the `>` prompt; submit an empty line (or Ctrl-D) to exit.
 bun test
 bun run typecheck
 ```
-
-## Layout
-
-```
-source/
-  client.ts            CLI entry: sets the process title, calls main()
-  main.ts              arg/cwd handling + interactive REPL
-  config.ts            model id and runtime limits
-  agent/
-    loop.ts            Agent: createMessage / runTurn / runTools
-    system-prompt.ts   system prompt assembly
-  tools/
-    registry.ts        single source of truth (schema + handler per tool)
-    context.ts         shared per-session state + tool types
-    read/write/edit/bash/search/fetch.ts, html-to-markdown.ts
-tests/                 bun:test suites
-```
-
-Each tool declares one Zod schema that drives both runtime validation and the
-Anthropic JSON tool schema, so the two can never drift.
