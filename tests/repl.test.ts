@@ -121,7 +121,7 @@ describe("runRepl slash commands", () => {
     expect(agent.runTurn).not.toHaveBeenCalled();
     expect(writes).toEqual([
       "\x1b[0m",
-      "Unknown command: /help. Available commands: /model\n",
+      "Unknown command: /help. Available commands: /model, /tree\n",
       "\x1b[0m",
     ]);
   });
