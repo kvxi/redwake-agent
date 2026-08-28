@@ -18,8 +18,12 @@ function fakeIO(inputs: Array<string | null>) {
   };
 }
 
-function fakeRuntime(agents: Record<Provider, Conversation>) {
-  const createAgent = mock((provider: Provider) => agents[provider]);
+function fakeRuntime(agents: Partial<Record<Provider, Conversation>>) {
+  const createAgent = mock((provider: Provider) => {
+    const agent = agents[provider];
+    if (!agent) throw new Error(`Missing fake agent for ${provider}`);
+    return agent;
+  });
   return {
     options: {
       provider: "anthropic" as const,
@@ -103,7 +107,7 @@ describe("runRepl slash commands", () => {
     expect(writes).toEqual([
       "\x1b[0m",
       "\x1b[0m",
-      "Invalid provider. Choose anthropic or openai.\n",
+      "Invalid provider. Choose anthropic or openai or openai-codex.\n",
       "\x1b[0m",
     ]);
   });
@@ -121,7 +125,7 @@ describe("runRepl slash commands", () => {
     expect(agent.runTurn).not.toHaveBeenCalled();
     expect(writes).toEqual([
       "\x1b[0m",
-      "Unknown command: /help. Available commands: /model, /tree\n",
+      "Unknown command: /help. Available commands: /model, /tree, /login, /logout, /status\n",
       "\x1b[0m",
     ]);
   });

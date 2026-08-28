@@ -1,20 +1,26 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type Provider = "anthropic" | "openai";
+export const PROVIDERS = ["anthropic", "openai", "openai-codex"] as const;
+export type Provider = typeof PROVIDERS[number];
+
+export function parseProvider(value: string): Provider | undefined {
+  return PROVIDERS.find((provider) => provider === value.trim().toLowerCase());
+}
 
 export const DEFAULT_MODELS: Readonly<Record<Provider, string>> = {
   anthropic: "claude-opus-5",
   openai: "gpt-5.6",
+  // Conservative compatibility fallback; authenticated discovery takes priority.
+  "openai-codex": "gpt-5.1-codex",
 };
 
 const configuredProvider = process.env.PROVIDER ?? "anthropic";
-if (configuredProvider !== "anthropic" && configuredProvider !== "openai") {
-  throw new Error(`Unsupported provider: ${configuredProvider}`);
-}
+const parsedProvider = parseProvider(configuredProvider);
+if (!parsedProvider) throw new Error(`Unsupported provider: ${configuredProvider}`);
 
 /** API provider selected by PROVIDER; defaults to Anthropic for compatibility. */
-export const PROVIDER: Provider = configuredProvider;
+export const PROVIDER: Provider = parsedProvider;
 
 /**
  * Resolves the selected provider's model. MODEL overrides only the provider
@@ -31,6 +37,8 @@ export const MAX_TOKENS = 4096;
 
 // Session-store root: ~/redwake/agent/sessions (per memory_sessions_plan.md).
 export const SESSIONS_ROOT = join(homedir(), "redwake", "agent", "sessions");
+/** Global, user-only credential database (never project-local). */
+export const AUTH_DB_PATH = join(homedir(), "redwake", "agent", "auth.sqlite");
 
 // Tool output/HTTP limits (ported from ToolSet class attributes).
 export const MAX_OUTPUT_CHARS = 20_000;
