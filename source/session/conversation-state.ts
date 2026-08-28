@@ -52,25 +52,66 @@ function eventSize(event: SessionEvent): number {
  * Canonical owner of session history. Returned arrays and events are cloned so
  * callers cannot mutate the authoritative transcript.
  */
+export interface ConversationEntry {
+  index: number;
+  event: SessionEvent;
+  recordId: number | null;
+}
+
 export class ConversationState {
   private readonly transcript: SessionEvent[];
+  private readonly recordIds: Array<number | null>;
 
   constructor(
     private readonly store?: SessionStore,
     initialEvents: readonly SessionEvent[] = [],
+    initialRecordIds: readonly (number | null)[] = [],
   ) {
     this.transcript = structuredClone([...initialEvents]);
+    this.recordIds = this.transcript.map((_, index) => initialRecordIds[index] ?? null);
   }
 
   get events(): readonly SessionEvent[] {
     return structuredClone(this.transcript);
   }
 
+  entries(): ReadonlyArray<ConversationEntry> {
+    return this.transcript.map((event, index) => ({
+      index,
+      event: structuredClone(event),
+      recordId: this.recordIds[index] ?? null,
+    }));
+  }
+
   append(event: SessionEvent): void {
     if (!isSessionEvent(event)) throw new TypeError("Invalid session event");
     const copy = structuredClone(event);
     this.transcript.push(copy);
-    this.store?.append(copy);
+    this.recordIds.push(this.store?.append(copy)?.id ?? null);
+  }
+
+  /** Truncate live context and move persistence to the corresponding ancestor. */
+  branchTo(index: number | null): boolean {
+    if (index !== null && (!Number.isInteger(index) || index < 0 || index >= this.transcript.length)) {
+      return false;
+    }
+
+    let persistedLeaf: number | null = null;
+    if (index !== null) {
+      for (let cursor = index; cursor >= 0; cursor -= 1) {
+        const candidate = this.recordIds[cursor];
+        if (candidate !== null && candidate !== undefined) {
+          persistedLeaf = candidate;
+          break;
+        }
+      }
+    }
+    if (this.store && !this.store.checkout(persistedLeaf)) return false;
+
+    const length = index === null ? 0 : index + 1;
+    this.transcript.splice(length);
+    this.recordIds.splice(length);
+    return true;
   }
 
   /**

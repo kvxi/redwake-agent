@@ -34,6 +34,13 @@ Use `/model` to select Anthropic or OpenAI without sending a model message.
 Changing providers starts a fresh provider-specific conversation while retaining
 the agent's tool state.
 
+Use `/tree` to navigate the current session path with ↑/↓, branch with Enter, or
+cancel with Esc. Selecting a user message branches from its parent and prefills
+that complete message for editing and resubmission. Selecting an assistant or
+tool entry keeps that entry as the leaf and opens an empty prompt. Abandoned
+branches remain in the append-only session file, but are excluded from all
+subsequent model context and from the active path when the session is resumed.
+
 ## Test / typecheck
 
 ```sh
