@@ -131,27 +131,31 @@ function keyName(key: Keypress): TreeSelectionKey | null {
   return null;
 }
 
-/** Display the current path and resolve to a transcript index, or null on cancel. */
-export async function selectTreeNode(
-  entries: readonly ConversationEntry[],
+export interface ListSelectorOptions<T, R> {
+  format: (item: T, options: TreeRowOptions) => string;
+  value: (item: T) => R;
+  footer: string;
+}
+
+/** Shared raw-terminal list selector used by both /tree and /sessions. */
+export async function selectListItem<T, R>(
+  items: readonly T[],
+  options: ListSelectorOptions<T, R>,
   io: TreeSelectorIO = {},
-): Promise<number | null> {
+): Promise<R | null> {
+  if (items.length === 0) return null;
   const input = io.input ?? defaultInput;
   const output = io.output ?? defaultOutput;
   const write = io.write ?? ((text: string) => output.write(text));
-  if (entries.length === 0) {
-    write("Session tree is empty.\n");
-    return null;
-  }
   if (!input.isTTY) return null;
 
   const columns = Math.max(20, io.columns ?? output.columns ?? 80);
   const terminalRows = Math.max(4, io.rows ?? output.rows ?? 24);
   const rowCount = Math.max(1, terminalRows - 2);
   let state: TreeSelectionState = {
-    selected: entries.length - 1,
-    offset: Math.max(0, entries.length - rowCount),
-    itemCount: entries.length,
+    selected: items.length - 1,
+    offset: Math.max(0, items.length - rowCount),
+    itemCount: items.length,
     rowCount,
   };
   let paintedLines = 0;
@@ -159,11 +163,11 @@ export async function selectTreeNode(
   const paint = () => {
     if (paintedLines > 0) write(`\x1b[${paintedLines}F`);
     write("\x1b[0m");
-    const visible = entries.slice(state.offset, state.offset + rowCount);
-    const lines = visible.map((entry, index) =>
-      `\x1b[2K${formatTreeRow(entry, { width: columns, selected: state.offset + index === state.selected })}`,
+    const visible = items.slice(state.offset, state.offset + rowCount);
+    const lines = visible.map((item, index) =>
+      `\x1b[2K${options.format(item, { width: columns, selected: state.offset + index === state.selected })}`,
     );
-    lines.push("\x1b[2K↑/↓ navigate · enter branch · esc cancel");
+    lines.push(`\x1b[2K${options.footer}`);
     write(`${lines.join("\n")}\n`);
     paintedLines = lines.length;
   };
@@ -177,8 +181,8 @@ export async function selectTreeNode(
 
   try {
     paint();
-    return await new Promise<number | null>((resolve) => {
-      const finish = (value: number | null) => {
+    return await new Promise<R | null>((resolve) => {
+      const finish = (value: R | null) => {
         input.off("keypress", onKeypress);
         resolve(value);
       };
@@ -187,8 +191,10 @@ export async function selectTreeNode(
         if (!name) return;
         const next = nextSelection(state, name);
         state = next;
-        if (next.outcome === "confirm") finish(entries[next.selected]?.index ?? null);
-        else if (next.outcome === "cancel") finish(null);
+        if (next.outcome === "confirm") {
+          const item = items[next.selected];
+          finish(item === undefined ? null : options.value(item));
+        } else if (next.outcome === "cancel") finish(null);
         else paint();
       };
       input.on("keypress", onKeypress);
@@ -199,4 +205,21 @@ export async function selectTreeNode(
     input.pause();
     io.resume?.();
   }
+}
+
+/** Display the current path and resolve to a transcript index, or null on cancel. */
+export async function selectTreeNode(
+  entries: readonly ConversationEntry[],
+  io: TreeSelectorIO = {},
+): Promise<number | null> {
+  if (entries.length === 0) {
+    const output = io.output ?? defaultOutput;
+    (io.write ?? ((text: string) => output.write(text)))("Session tree is empty.\n");
+    return null;
+  }
+  return selectListItem(entries, {
+    format: formatTreeRow,
+    value: (entry) => entry.index,
+    footer: "↑/↓ navigate · enter branch · esc cancel",
+  }, io);
 }

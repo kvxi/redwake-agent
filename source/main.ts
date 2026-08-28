@@ -10,6 +10,8 @@ import { createToolContext } from "./tools/context.ts";
 import { createSessionStore, SessionStore } from "./session/store.ts";
 import { ConversationState, type ConversationEntry } from "./session/conversation-state.ts";
 import { selectTreeNode } from "./session/tree-ui.ts";
+import { SessionNavigator, type SessionSummary } from "./session/navigator.ts";
+import { selectSession } from "./session/sessions-ui.ts";
 
 export interface ReplIO {
   /** Prompt for a line; resolves to null at end-of-input. */
@@ -17,6 +19,7 @@ export interface ReplIO {
   write(text: string): void;
   close(): void;
   showTree?(entries: readonly ConversationEntry[]): Promise<number | null>;
+  showSessions?(sessions: readonly SessionSummary[]): Promise<string | null>;
 }
 
 export interface BranchableConversation {
@@ -24,16 +27,22 @@ export interface BranchableConversation {
   branchTo(index: number | null): boolean;
 }
 
+export interface SessionNavigation {
+  list(): SessionSummary[];
+  activate(path: string): { status: "switched" | "already-active"; eventCount: number };
+}
+
 export interface ReplOptions {
   provider: Provider;
   createAgent: (provider: Provider) => ReturnType<ProviderAgentFactory>;
   modelFor: (provider: Provider) => string;
   conversation?: BranchableConversation;
+  sessions?: SessionNavigation;
   auth?: AuthService;
   discoverCodexModels?: () => Promise<ModelDescriptor[]>;
 }
 
-const USER_INPUT_STYLE = "\x1b[1;36m";
+const USER_INPUT_STYLE = "\x1b[1;31m";
 const RESET_STYLE = "\x1b[0m";
 
 /**
@@ -179,8 +188,50 @@ export async function runRepl(
         continue;
       }
 
+      if (userMessage === "/sessions") {
+        if (!options.sessions || !io.showSessions) {
+          io.write("Session selection is not available in this session.\n");
+          continue;
+        }
+        let sessions: SessionSummary[];
+        try {
+          sessions = options.sessions.list();
+        } catch (error) {
+          io.write(`Could not list sessions: ${error instanceof Error ? error.message : String(error)}\n`);
+          continue;
+        }
+        if (sessions.length === 0) {
+          io.write("No sessions found for this workspace.\n");
+          continue;
+        }
+        let path: string | null;
+        try {
+          path = await io.showSessions(sessions);
+        } catch {
+          path = null;
+        }
+        if (path === null) {
+          io.write("Session selection canceled.\n");
+          continue;
+        }
+        try {
+          const result = options.sessions.activate(path);
+          if (result.status === "already-active") {
+            io.write("That session is already active.\n");
+            continue;
+          }
+          pendingEditorText = "";
+          rebuildAgent();
+          const name = sessions.find((session) => session.path === path)?.name ?? path;
+          io.write(`Continued ${name} (${result.eventCount} events).\n`);
+        } catch (error) {
+          io.write(`Could not continue session: ${error instanceof Error ? error.message : String(error)}\n`);
+        }
+        continue;
+      }
+
       if (userMessage.startsWith("/")) {
-        io.write(`Unknown command: ${userMessage}. Available commands: /model, /tree, /login, /logout, /status\n`);
+        io.write(`Unknown command: ${userMessage}. Available commands: /model, /tree, /sessions, /login, /logout, /status\n`);
         continue;
       }
 
@@ -222,18 +273,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     close: () => rl.close(),
   };
   if (stdin.isTTY) {
-    io.showTree = (entries) => selectTreeNode(entries, {
+    const selectorIO = {
       input: stdin,
       output: stdout,
       pause: () => rl.pause(),
       resume: () => rl.resume(),
-    });
+    };
+    io.showTree = (entries) => selectTreeNode(entries, selectorIO);
+    io.showSessions = (sessions) => selectSession(sessions, selectorIO);
   }
   const conversation = new ConversationState(
     store,
     initialEvents,
     initialRecords.map((record) => record.id),
   );
+  const sessions = new SessionNavigator(conversation, store);
   const auth = new CodexAuthService();
   const createAgent = createAgentFactory({
     ctx: createToolContext(),
@@ -241,5 +295,5 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     credentials: auth.credentials,
   });
   const catalog = new ModelCatalog(auth.credentials, auth.store);
-  await runRepl({ provider: PROVIDER, createAgent, modelFor, conversation, auth, discoverCodexModels: () => catalog.discover(true) }, io);
+  await runRepl({ provider: PROVIDER, createAgent, modelFor, conversation, sessions, auth, discoverCodexModels: () => catalog.discover(true) }, io);
 }
