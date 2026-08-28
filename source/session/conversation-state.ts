@@ -1,4 +1,4 @@
-import type { SessionStore } from "./store.ts";
+import type { SessionRecord, SessionStore } from "./store.ts";
 
 export type SessionEvent =
   | { type: "user"; content: string }
@@ -63,7 +63,7 @@ export class ConversationState {
   private readonly recordIds: Array<number | null>;
 
   constructor(
-    private readonly store?: SessionStore,
+    private store?: SessionStore,
     initialEvents: readonly SessionEvent[] = [],
     initialRecordIds: readonly (number | null)[] = [],
   ) {
@@ -88,6 +88,29 @@ export class ConversationState {
     const copy = structuredClone(event);
     this.transcript.push(copy);
     this.recordIds.push(this.store?.append(copy)?.id ?? null);
+  }
+
+  /** Atomically replace the canonical transcript and its persistence target. */
+  replaceSession(store: SessionStore, records: readonly SessionRecord[]): void {
+    const events: SessionEvent[] = [];
+    const ids: number[] = [];
+    const seen = new Set<number>();
+    let parent: number | null = null;
+    for (const record of records) {
+      if (!Number.isSafeInteger(record.id) || seen.has(record.id) || record.parent !== parent || !isSessionEvent(record.event)) {
+        throw new TypeError("Invalid session history path");
+      }
+      seen.add(record.id);
+      ids.push(record.id);
+      events.push(structuredClone(record.event));
+      parent = record.id;
+    }
+    const expectedLeaf = records.length ? records[records.length - 1]!.id : null;
+    if (store.leaf !== expectedLeaf) throw new TypeError("Session history does not end at the active leaf");
+
+    this.transcript.splice(0, this.transcript.length, ...events);
+    this.recordIds.splice(0, this.recordIds.length, ...ids);
+    this.store = store;
   }
 
   /** Truncate live context and move persistence to the corresponding ancestor. */

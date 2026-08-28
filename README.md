@@ -59,6 +59,13 @@ tool entry keeps that entry as the leaf and opens an empty prompt. Abandoned
 branches remain in the append-only session file, but are excluded from all
 subsequent model context and from the active path when the session is resumed.
 
+Use `/sessions` to list sessions for the current project, move with ↑/↓, continue
+one with Enter, or cancel with Esc. Continuing changes the active append-only
+session file and rebuilds model context from that session's active branch; the
+current provider and model are retained. Unlike `/tree`, it does not create a
+branch or prefill an earlier message—the next prompt is appended to the selected
+session's current leaf.
+
 ## Test / typecheck
 
 ```sh

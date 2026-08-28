@@ -188,17 +188,50 @@ export class SessionStore {
   }
 }
 
+export interface SessionFile {
+  path: string;
+  name: string;
+  number: number;
+}
+
+export function sessionDirectory(
+  cwd: string = process.cwd(),
+  root: string = SESSIONS_ROOT,
+): string {
+  return join(root, encodeURIComponent(resolve(cwd)));
+}
+
+function parseSessionName(name: string): number | null {
+  const match = /^session-(\d+)\.jsonl$/.exec(name);
+  if (!match) return null;
+  const number = Number(match[1]);
+  return Number.isSafeInteger(number) && number >= 1 ? number : null;
+}
+
+/** Discover this workspace's canonical session files in numeric order. */
+export function listSessionFiles(
+  cwd: string = process.cwd(),
+  root: string = SESSIONS_ROOT,
+): SessionFile[] {
+  const dir = sessionDirectory(cwd, root);
+  if (!existsSync(dir)) return [];
+  const files: SessionFile[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const number = parseSessionName(entry.name);
+    if (number !== null) files.push({ path: resolve(dir, entry.name), name: entry.name, number });
+  }
+  return files.sort((a, b) => a.number - b.number);
+}
+
 export function createSessionStore(
   cwd: string = process.cwd(),
   root: string = SESSIONS_ROOT,
   options: SessionStoreOptions = {},
 ): SessionStore {
-  const dir = join(root, encodeURIComponent(resolve(cwd)));
+  const dir = sessionDirectory(cwd, root);
   mkdirSync(dir, { recursive: true });
-  let max = 0;
-  for (const name of readdirSync(dir)) {
-    const match = /^session-(\d+)\.jsonl$/.exec(name);
-    if (match) max = Math.max(max, Number(match[1]));
-  }
+  const files = listSessionFiles(cwd, root);
+  const max = files.reduce((value, file) => Math.max(value, file.number), 0);
   return new SessionStore(join(dir, `session-${max + 1}.jsonl`), options);
 }

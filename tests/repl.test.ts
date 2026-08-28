@@ -125,9 +125,61 @@ describe("runRepl slash commands", () => {
     expect(agent.runTurn).not.toHaveBeenCalled();
     expect(writes).toEqual([
       "\x1b[0m",
-      "Unknown command: /help. Available commands: /model, /tree, /login, /logout, /status\n",
+      "Unknown command: /help. Available commands: /model, /tree, /sessions, /login, /logout, /status\n",
       "\x1b[0m",
     ]);
+  });
+
+  test("continues a selected session locally and rebuilds before the next message", async () => {
+    const first = { runTurn: mock(async (_message: string) => {}) };
+    const second = { runTurn: mock(async (_message: string) => {}) };
+    let created = 0;
+    const createAgent = mock((_provider: Provider) => created++ === 0 ? first : second);
+    const activate = mock((_path: string) => ({ status: "switched" as const, eventCount: 4 }));
+    const list = mock(() => [{
+      path: "/tmp/session-1.jsonl",
+      name: "session-1.jsonl",
+      number: 1,
+      eventCount: 4,
+      active: false,
+      preview: { type: "user" as const, content: "old" },
+    }]);
+    const { io, writes } = fakeIO(["/sessions", "continue", ""]);
+    const showSessions = mock(async () => "/tmp/session-1.jsonl");
+
+    await runRepl({
+      provider: "anthropic",
+      createAgent,
+      modelFor: () => "claude-opus-5",
+      sessions: { list, activate },
+    }, { ...io, showSessions });
+
+    expect(first.runTurn).not.toHaveBeenCalled();
+    expect(second.runTurn).toHaveBeenCalledWith("continue");
+    expect(activate).toHaveBeenCalledWith("/tmp/session-1.jsonl");
+    expect(createAgent).toHaveBeenCalledTimes(2);
+    expect(writes).toContain("Continued session-1.jsonl (4 events).\n");
+  });
+
+  test("cancels session selection without rebuilding or calling the model", async () => {
+    const agent = { runTurn: mock(async (_message: string) => {}) };
+    const { options, createAgent } = fakeRuntime({
+      anthropic: agent,
+      openai: { runTurn: mock(async (_message: string) => {}) },
+    });
+    const activate = mock((_path: string) => ({ status: "switched" as const, eventCount: 0 }));
+    const { io, writes } = fakeIO(["/sessions", ""]);
+    await runRepl({
+      ...options,
+      sessions: {
+        list: () => [{ path: "/tmp/session-1.jsonl", name: "session-1.jsonl", number: 1, eventCount: 0, active: true }],
+        activate,
+      },
+    }, { ...io, showSessions: async () => null });
+    expect(activate).not.toHaveBeenCalled();
+    expect(createAgent).toHaveBeenCalledTimes(1);
+    expect(agent.runTurn).not.toHaveBeenCalled();
+    expect(writes).toContain("Session selection canceled.\n");
   });
 
   test("exits without a model call on blank input", async () => {
@@ -156,8 +208,8 @@ describe("runRepl prompts", () => {
     await runRepl(options, io);
 
     expect(question.mock.calls).toEqual([
-      ["\x1b[1;36m> "],
-      ["\x1b[1;36m> "],
+      ["\x1b[1;31m> "],
+      ["\x1b[1;31m> "],
     ]);
     expect(writes).toEqual(["\x1b[0m", "\x1b[0m"]);
   });
