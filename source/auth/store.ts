@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
-import { AUTH_DB_PATH } from "../config.ts";
+import { AUTH_DB_PATH, parseProvider, type Provider } from "../config.ts";
 import type { OAuthCredential, QuotaState } from "./types.ts";
 
 const MIGRATION = `
@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS quota_state (
 CREATE TABLE IF NOT EXISTS model_cache (
  provider TEXT NOT NULL, account_id TEXT NOT NULL, etag TEXT, payload_json TEXT NOT NULL, fetched_at INTEGER NOT NULL,
  PRIMARY KEY(provider, account_id), FOREIGN KEY(provider, account_id) REFERENCES oauth_credentials(provider, account_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS model_selection (
+ singleton INTEGER PRIMARY KEY CHECK(singleton = 1), provider TEXT NOT NULL, model TEXT NOT NULL, updated_at INTEGER NOT NULL
 );`;
 
 type CredentialRow = { provider: "openai-codex"; account_id: string; email: string | null; plan_type: string | null; residency: string | null; access_token: string; refresh_token: string | null; id_token: string | null; expires_at: number; created_at: number; updated_at: number; last_used_at: number | null; disabled_at: number | null; last_auth_error: string | null };
@@ -45,7 +48,9 @@ export class AuthStore {
     this.db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
     this.db.transaction(() => {
       this.db.exec(MIGRATION);
-      this.db.query("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?)").run(Date.now());
+      const now = Date.now();
+      this.db.query("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?)").run(now);
+      this.db.query("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)").run(now);
     })();
     if (path !== ":memory:") chmodSync(path, 0o600);
   }
@@ -76,4 +81,16 @@ export class AuthStore {
   putQuota(q: QuotaState): void { this.db.query(`INSERT INTO quota_state(provider,account_id,primary_used_percent,primary_reset_at,secondary_used_percent,secondary_reset_at,blocked_until,last_http_status,observed_at) VALUES($provider,$accountId,$primaryUsedPercent,$primaryResetAt,$secondaryUsedPercent,$secondaryResetAt,$blockedUntil,$lastHttpStatus,$observedAt) ON CONFLICT(provider,account_id) DO UPDATE SET primary_used_percent=excluded.primary_used_percent,primary_reset_at=excluded.primary_reset_at,secondary_used_percent=excluded.secondary_used_percent,secondary_reset_at=excluded.secondary_reset_at,blocked_until=excluded.blocked_until,last_http_status=excluded.last_http_status,observed_at=excluded.observed_at`).run({ ...q, primaryUsedPercent: q.primaryUsedPercent ?? null, primaryResetAt: q.primaryResetAt ?? null, secondaryUsedPercent: q.secondaryUsedPercent ?? null, secondaryResetAt: q.secondaryResetAt ?? null, blockedUntil: q.blockedUntil ?? null, lastHttpStatus: q.lastHttpStatus ?? null }); }
   getModelCache(accountId: string): { etag?: string; payload: unknown; fetchedAt: number } | undefined { const r = this.db.query("SELECT etag,payload_json,fetched_at FROM model_cache WHERE provider='openai-codex' AND account_id=?").get(accountId) as {etag:string|null;payload_json:string;fetched_at:number}|null; return r ? { etag:r.etag??undefined,payload:JSON.parse(r.payload_json),fetchedAt:r.fetched_at } : undefined; }
   putModelCache(accountId: string, payload: unknown, fetchedAt=Date.now(), etag?: string): void { this.db.query("INSERT INTO model_cache(provider,account_id,etag,payload_json,fetched_at) VALUES('openai-codex',?,?,?,?) ON CONFLICT(provider,account_id) DO UPDATE SET etag=excluded.etag,payload_json=excluded.payload_json,fetched_at=excluded.fetched_at").run(accountId,etag??null,JSON.stringify(payload),fetchedAt); }
+
+  /** The last provider/model chosen with /model, shared across workspaces. */
+  getModelSelection(): { provider: Provider; model: string } | undefined {
+    const row = this.db.query("SELECT provider,model FROM model_selection WHERE singleton=1").get() as {provider:string;model:string}|null;
+    if (!row) return undefined;
+    const provider = parseProvider(row.provider);
+    return provider && row.model.trim() ? { provider, model: row.model } : undefined;
+  }
+  putModelSelection(provider: Provider, model: string, updatedAt=Date.now()): void {
+    if (!model.trim()) throw new Error("Cannot persist an empty model selection");
+    this.db.query("INSERT INTO model_selection(singleton,provider,model,updated_at) VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET provider=excluded.provider,model=excluded.model,updated_at=excluded.updated_at").run(provider,model,updatedAt);
+  }
 }

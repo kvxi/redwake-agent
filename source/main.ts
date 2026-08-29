@@ -34,13 +34,17 @@ export interface SessionNavigation {
 
 export interface ReplOptions {
   provider: Provider;
-  createAgent: (provider: Provider) => ReturnType<ProviderAgentFactory>;
+  /** Overrides modelFor(provider) for a restored startup selection. */
+  initialModel?: string;
+  createAgent: ProviderAgentFactory;
   modelFor: (provider: Provider) => string;
+  saveModelSelection?: (provider: Provider, model: string) => void;
   conversation?: BranchableConversation;
   sessions?: SessionNavigation;
   auth?: AuthService;
   discoverCodexModels?: () => Promise<ModelDescriptor[]>;
 }
+
 
 const USER_INPUT_STYLE = "\x1b[1;31m";
 const RESET_STYLE = "\x1b[0m";
@@ -55,11 +59,11 @@ export async function runRepl(
   io: ReplIO,
 ): Promise<void> {
   let provider = options.provider;
-  let model = options.modelFor(provider);
+  let model = options.initialModel ?? options.modelFor(provider);
   // Codex starts lazily so an unauthenticated user can run /login first.
-  let agent = provider === "openai-codex" ? undefined : options.createAgent(provider);
+  let agent = provider === "openai-codex" ? undefined : options.createAgent({ provider, model });
   let pendingEditorText = "";
-  const rebuildAgent = () => { agent = provider === "openai-codex" ? (options.createAgent as ProviderAgentFactory)({ provider, model }) : options.createAgent(provider); };
+  const rebuildAgent = () => { agent = options.createAgent({ provider, model }); };
   const ensureAgent = () => { if (!agent) rebuildAgent(); return agent!; };
 
   const question = async (prompt: string, initialText?: string): Promise<string | null> => {
@@ -83,6 +87,24 @@ export async function runRepl(
           continue;
         }
         return;
+      }
+
+      if (userMessage === "/status") {
+        let sessionName = "unavailable";
+        let eventCount = options.conversation?.entries().length ?? 0;
+        if (options.sessions) {
+          try {
+            const activeSession = options.sessions.list().find((session) => session.active);
+            if (activeSession) {
+              sessionName = activeSession.name;
+              if (!options.conversation) eventCount = activeSession.eventCount;
+            }
+          } catch {
+            // Model status remains useful if session metadata cannot be read.
+          }
+        }
+        io.write(`Active model: ${model} (${provider})\nSession: ${sessionName}\nSession events: ${eventCount}\n`);
+        continue;
       }
 
       if (userMessage === "/model") {
@@ -115,12 +137,14 @@ export async function runRepl(
           } catch (error) { io.write(`Could not discover Codex models: ${error instanceof Error ? error.message : String(error)}\n`); continue; }
         }
         if (selected === provider && selectedModel === model) {
+          options.saveModelSelection?.(provider, model);
           io.write(`Already using ${provider} with ${model}. Conversation retained.\n`);
           continue;
         }
         provider = selected;
         model = selectedModel;
         rebuildAgent();
+        options.saveModelSelection?.(provider, model);
         io.write(`Switched to ${provider} using ${model}. Conversation retained.\n`);
         continue;
       }
@@ -289,11 +313,28 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   );
   const sessions = new SessionNavigator(conversation, store);
   const auth = new CodexAuthService();
+  const savedSelection = auth.store.getModelSelection();
+  // Explicit environment configuration wins; otherwise restore the last /model choice.
+  const startupProvider = process.env.PROVIDER || process.env.MODEL
+    ? PROVIDER
+    : savedSelection?.provider ?? PROVIDER;
+  const startupModel = process.env.MODEL
+    ?? (savedSelection?.provider === startupProvider ? savedSelection.model : modelFor(startupProvider));
   const createAgent = createAgentFactory({
     ctx: createToolContext(),
     conversation,
     credentials: auth.credentials,
   });
   const catalog = new ModelCatalog(auth.credentials, auth.store);
-  await runRepl({ provider: PROVIDER, createAgent, modelFor, conversation, sessions, auth, discoverCodexModels: () => catalog.discover(true) }, io);
+  await runRepl({
+    provider: startupProvider,
+    initialModel: startupModel,
+    createAgent,
+    modelFor,
+    saveModelSelection: (provider, model) => auth.store.putModelSelection(provider, model),
+    conversation,
+    sessions,
+    auth,
+    discoverCodexModels: () => catalog.discover(true),
+  }, io);
 }

@@ -45,7 +45,7 @@ export class AnthropicAgent extends AgentBase<Message, ToolResultBlockParam> {
       model: this.model,
       max_tokens: MAX_TOKENS,
       messages: this.messages,
-      system: system ?? buildSystemPrompt(),
+      system: system ?? buildSystemPrompt({ cwd: process.cwd() }),
       tools: this.anthropicTools,
     });
   }

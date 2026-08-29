@@ -19,7 +19,8 @@ function fakeIO(inputs: Array<string | null>) {
 }
 
 function fakeRuntime(agents: Partial<Record<Provider, Conversation>>) {
-  const createAgent = mock((provider: Provider) => {
+  const createAgent = mock((selection: Provider | { provider: Provider; model: string }) => {
+    const provider = typeof selection === "string" ? selection : selection.provider;
     const agent = agents[provider];
     if (!agent) throw new Error(`Missing fake agent for ${provider}`);
     return agent;
@@ -35,6 +36,7 @@ function fakeRuntime(agents: Partial<Record<Provider, Conversation>>) {
   };
 }
 
+
 describe("runRepl slash commands", () => {
   test("switches providers without sending the command to either model", async () => {
     const anthropic = { runTurn: mock(async (_message: string) => {}) };
@@ -44,7 +46,10 @@ describe("runRepl slash commands", () => {
 
     await runRepl(options, io);
 
-    expect(createAgent.mock.calls).toEqual([["anthropic"], ["openai"]]);
+    expect(createAgent.mock.calls).toEqual([
+      [{ provider: "anthropic", model: "claude-opus-5" }],
+      [{ provider: "openai", model: "gpt-5.6" }],
+    ]);
     expect(anthropic.runTurn).not.toHaveBeenCalled();
     expect(openai.runTurn).toHaveBeenCalledWith("explain this");
     expect(writes).toEqual([
@@ -54,6 +59,60 @@ describe("runRepl slash commands", () => {
       "\x1b[0m",
       "\x1b[0m",
     ]);
+  });
+
+  test("shows the active model and session details without calling the model", async () => {
+    const agent = { runTurn: mock(async (_message: string) => {}) };
+    const { options } = fakeRuntime({ anthropic: agent });
+    const entries = mock(() => [
+      { index: 0, event: { type: "user" as const, content: "hello" }, recordId: 0 },
+      { index: 1, event: { type: "assistant" as const, content: "hi" }, recordId: 1 },
+    ]);
+    const list = mock(() => [{
+      path: "/tmp/session-7.jsonl",
+      name: "session-7.jsonl",
+      number: 7,
+      eventCount: 2,
+      active: true,
+    }]);
+    const { io, writes } = fakeIO(["/status", ""]);
+
+    await runRepl({
+      ...options,
+      initialModel: "claude-restored",
+      conversation: { entries, branchTo: () => true },
+      sessions: { list, activate: () => ({ status: "already-active", eventCount: 2 }) },
+    }, io);
+
+    expect(agent.runTurn).not.toHaveBeenCalled();
+    expect(writes).toContain(
+      "Active model: claude-restored (anthropic)\nSession: session-7.jsonl\nSession events: 2\n",
+    );
+  });
+
+  test("uses a restored model when constructing the startup agent", async () => {
+    const anthropic = { runTurn: mock(async (_message: string) => {}) };
+    const { options, createAgent } = fakeRuntime({ anthropic });
+    const { io } = fakeIO([""]);
+
+    await runRepl({ ...options, initialModel: "claude-restored" }, io);
+
+    expect(createAgent).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "claude-restored",
+    });
+  });
+
+  test("persists a successful model selection", async () => {
+    const anthropic = { runTurn: mock(async (_message: string) => {}) };
+    const openai = { runTurn: mock(async (_message: string) => {}) };
+    const { options } = fakeRuntime({ anthropic, openai });
+    const saveModelSelection = mock((_provider: Provider, _model: string) => {});
+    const { io } = fakeIO(["/model", "openai", ""]);
+
+    await runRepl({ ...options, saveModelSelection }, io);
+
+    expect(saveModelSelection).toHaveBeenCalledWith("openai", "gpt-5.6");
   });
 
   test("treats selecting the active provider as a no-op", async () => {
@@ -134,7 +193,7 @@ describe("runRepl slash commands", () => {
     const first = { runTurn: mock(async (_message: string) => {}) };
     const second = { runTurn: mock(async (_message: string) => {}) };
     let created = 0;
-    const createAgent = mock((_provider: Provider) => created++ === 0 ? first : second);
+    const createAgent = mock((_selection: Provider | { provider: Provider; model: string }) => created++ === 0 ? first : second);
     const activate = mock((_path: string) => ({ status: "switched" as const, eventCount: 4 }));
     const list = mock(() => [{
       path: "/tmp/session-1.jsonl",

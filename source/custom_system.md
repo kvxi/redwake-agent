@@ -1,1 +1,0 @@
-Mark the end of response with: "finished up."

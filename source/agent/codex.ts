@@ -8,7 +8,7 @@ import { toOpenAIHistory } from "./history.ts";
 import { buildSystemPrompt } from "./system-prompt.ts";
 export interface CodexAgentOptions extends AgentBaseOptions {transport:CodexTransport;model?:string;}
 export class CodexAgent extends AgentBase<CodexTurnResponse,CodexFunctionOutput>{private readonly model:string;private readonly input:ResponseInput;private readonly tools=toOpenAITools();constructor(private readonly options:CodexAgentOptions){super(options);this.model=options.model??modelFor("openai-codex");this.input=toOpenAIHistory(this.conversation.snapshot(1_200_000));}
- createResponse(system?:string):Promise<CodexTurnResponse>{const instructions=system?.trim()?system:buildSystemPrompt();const body:CodexRequest={model:this.model,instructions,input:this.input as unknown[],tools:this.tools as unknown[],tool_choice:"auto",parallel_tool_calls:true,store:false,stream:true,include:["reasoning.encrypted_content"]};return this.options.transport.createResponse(body);}
+ createResponse(system?:string):Promise<CodexTurnResponse>{const instructions=system?.trim()?system:buildSystemPrompt({cwd:process.cwd()});const body:CodexRequest={model:this.model,instructions,input:this.input as unknown[],tools:this.tools as unknown[],tool_choice:"auto",parallel_tool_calls:true,store:false,stream:true,include:["reasoning.encrypted_content"]};return this.options.transport.createResponse(body);}
  protected appendUser(message:string):void{this.input.push({role:"user",content:message});}
  protected request():Promise<CodexTurnResponse>{return this.createResponse();}
  protected remember(response:CodexTurnResponse):void{this.input.push(...response.output as ResponseInput);}
