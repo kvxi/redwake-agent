@@ -37,22 +37,51 @@ export class OpenAIAgent extends AgentBase<
     this.input = toOpenAIHistory(this.conversation.snapshot(1_200_000));
   }
 
-  createResponse(system?: string): Promise<Response> {
-    return this.client.responses.create({
+  private responseParams(system?: string) {
+    return {
       model: this.model,
       max_output_tokens: MAX_TOKENS,
       input: this.input,
       instructions: system ?? buildSystemPrompt({ cwd: process.cwd() }),
       tools: this.openAITools,
-    });
+    };
+  }
+
+  createResponse(system?: string): Promise<Response> {
+    return this.client.responses.create(this.responseParams(system));
   }
 
   protected appendUser(userMessage: string): void {
     this.input.push({ role: "user", content: userMessage });
   }
 
-  protected request(): Promise<Response> {
-    return this.createResponse();
+  protected async request(): Promise<Response> {
+    const result = await this.client.responses.create({ ...this.responseParams(), stream: true });
+    // Compatibility for simple clients/fakes that return a complete response.
+    if (!(Symbol.asyncIterator in (result as object))) return result as unknown as Response;
+
+    let completed: Response | undefined;
+    for await (const rawEvent of result as unknown as AsyncIterable<unknown>) {
+      const event = rawEvent as {
+        type?: string;
+        delta?: string;
+        response?: Response & { error?: { message?: string } | null };
+        error?: { message?: string } | string;
+        message?: string;
+      };
+      if (event.type === "response.output_text.delta") {
+        if (event.delta) this.emitTextDelta(event.delta);
+      } else if (event.type === "response.completed") {
+        completed = event.response;
+      } else if (event.type === "response.failed" || event.type === "response.incomplete" || event.type === "error") {
+        const detail = typeof event.error === "string"
+          ? event.error
+          : event.error?.message ?? event.response?.error?.message ?? event.message;
+        throw new Error(`OpenAI stream ${event.type}: ${detail ?? "unknown error"}`);
+      }
+    }
+    if (!completed) throw new Error("OpenAI stream ended before a completed response");
+    return completed;
   }
 
   protected remember(response: Response): void {

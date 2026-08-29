@@ -35,7 +35,7 @@ function truncate(text: string, width: number): string {
 }
 
 const BOLD_RED = "\x1b[1;31m";
-const BOLD_YELLOW = "\x1b[1;33m";
+const BOLD_BLUE = "\x1b[1;34m";
 const RESET_STYLE = "\x1b[0m";
 
 /** Format one inert, single-line event preview suitable for terminal painting. */
@@ -71,7 +71,7 @@ export function formatTreeRow(entry: ConversationEntry, options: TreeRowOptions 
   const style = event.type === "user"
     ? BOLD_RED
     : event.type === "assistant"
-      ? BOLD_YELLOW
+      ? BOLD_BLUE
       : null;
   if (!style) return row;
   return `${row.slice(0, marker.length)}${style}${row.slice(marker.length)}${RESET_STYLE}`;
@@ -131,10 +131,16 @@ function keyName(key: Keypress): TreeSelectionKey | null {
   return null;
 }
 
+export type ListActivation<T, R> =
+  | { type: "select"; value: R | null }
+  | { type: "update"; items: readonly T[]; selected?: number };
+
 export interface ListSelectorOptions<T, R> {
   format: (item: T, options: TreeRowOptions) => string;
   value: (item: T) => R;
   footer: string;
+  /** Optionally turn Enter into an in-place list update instead of selection. */
+  activate?: (item: T, index: number) => ListActivation<T, R>;
 }
 
 /** Shared raw-terminal list selector used by both /tree and /sessions. */
@@ -152,10 +158,11 @@ export async function selectListItem<T, R>(
   const columns = Math.max(20, io.columns ?? output.columns ?? 80);
   const terminalRows = Math.max(4, io.rows ?? output.rows ?? 24);
   const rowCount = Math.max(1, terminalRows - 2);
+  let currentItems = [...items];
   let state: TreeSelectionState = {
-    selected: items.length - 1,
-    offset: Math.max(0, items.length - rowCount),
-    itemCount: items.length,
+    selected: currentItems.length - 1,
+    offset: Math.max(0, currentItems.length - rowCount),
+    itemCount: currentItems.length,
     rowCount,
   };
   let paintedLines = 0;
@@ -163,7 +170,7 @@ export async function selectListItem<T, R>(
   const paint = () => {
     if (paintedLines > 0) write(`\x1b[${paintedLines}F`);
     write("\x1b[0m");
-    const visible = items.slice(state.offset, state.offset + rowCount);
+    const visible = currentItems.slice(state.offset, state.offset + rowCount);
     const lines = visible.map((item, index) =>
       `\x1b[2K${options.format(item, { width: columns, selected: state.offset + index === state.selected })}`,
     );
@@ -192,8 +199,30 @@ export async function selectListItem<T, R>(
         const next = nextSelection(state, name);
         state = next;
         if (next.outcome === "confirm") {
-          const item = items[next.selected];
-          finish(item === undefined ? null : options.value(item));
+          const item = currentItems[next.selected];
+          if (item === undefined) {
+            finish(null);
+          } else {
+            const activation = options.activate?.(item, next.selected);
+            if (!activation) {
+              finish(options.value(item));
+            } else if (activation.type === "select") {
+              finish(activation.value);
+            } else {
+              currentItems = [...activation.items];
+              const selected = Math.min(
+                Math.max(0, activation.selected ?? next.selected),
+                Math.max(0, currentItems.length - 1),
+              );
+              const normalized = nextSelection({
+                ...state,
+                selected,
+                itemCount: currentItems.length,
+              }, "enter");
+              state = normalized;
+              paint();
+            }
+          }
         } else if (next.outcome === "cancel") finish(null);
         else paint();
       };
@@ -207,6 +236,72 @@ export async function selectListItem<T, R>(
   }
 }
 
+export type TreeDisplayRow =
+  | { kind: "event"; entry: ConversationEntry; nested: boolean }
+  | {
+      kind: "tool_group";
+      startIndex: number;
+      entries: readonly ConversationEntry[];
+      callCount: number;
+      expanded: boolean;
+    };
+
+function isToolEntry(entry: ConversationEntry): boolean {
+  return entry.event.type === "tool_call" || entry.event.type === "tool_result";
+}
+
+/** Collapse each consecutive run of tool events into one expandable row. */
+export function buildTreeRows(
+  entries: readonly ConversationEntry[],
+  expandedGroups: ReadonlySet<number> = new Set(),
+): TreeDisplayRow[] {
+  const rows: TreeDisplayRow[] = [];
+  for (let cursor = 0; cursor < entries.length;) {
+    const entry = entries[cursor]!;
+    if (!isToolEntry(entry)) {
+      rows.push({ kind: "event", entry, nested: false });
+      cursor += 1;
+      continue;
+    }
+
+    const group: ConversationEntry[] = [];
+    while (cursor < entries.length && isToolEntry(entries[cursor]!)) {
+      group.push(entries[cursor]!);
+      cursor += 1;
+    }
+    const startIndex = group[0]!.index;
+    const expanded = expandedGroups.has(startIndex);
+    rows.push({
+      kind: "tool_group",
+      startIndex,
+      entries: group,
+      callCount: group.filter((item) => item.event.type === "tool_call").length,
+      expanded,
+    });
+    if (expanded) {
+      rows.push(...group.map((item) => ({ kind: "event" as const, entry: item, nested: true })));
+    }
+  }
+  return rows;
+}
+
+export function formatTreeDisplayRow(row: TreeDisplayRow, options: TreeRowOptions = {}): string {
+  const width = Math.max(0, options.width ?? 80);
+  if (row.kind === "event") {
+    if (!row.nested) return formatTreeRow(row.entry, options);
+    const formatted = formatTreeRow(row.entry, { ...options, width: Math.max(0, width - 2) });
+    return formatted.length <= 2 ? formatted : `${formatted.slice(0, 2)}  ${formatted.slice(2)}`;
+  }
+
+  const marker = options.selected ? "❯ " : "  ";
+  const disclosure = row.expanded ? "▼" : "▶";
+  const count = row.callCount || row.entries.length;
+  const noun = row.callCount === 0
+    ? `tool event${count === 1 ? "" : "s"}`
+    : `tool call${count === 1 ? "" : "s"}`;
+  return truncate(`${marker}${disclosure} ${count} ${noun}`, width);
+}
+
 /** Display the current path and resolve to a transcript index, or null on cancel. */
 export async function selectTreeNode(
   entries: readonly ConversationEntry[],
@@ -217,9 +312,26 @@ export async function selectTreeNode(
     (io.write ?? ((text: string) => output.write(text)))("Session tree is empty.\n");
     return null;
   }
-  return selectListItem(entries, {
-    format: formatTreeRow,
-    value: (entry) => entry.index,
-    footer: "↑/↓ navigate · enter branch · esc cancel",
+
+  const expandedGroups = new Set<number>();
+  let rows = buildTreeRows(entries, expandedGroups);
+  return selectListItem(rows, {
+    format: formatTreeDisplayRow,
+    // Group rows are handled by activate and never selected as branch targets.
+    value: (row) => row.kind === "event" ? row.entry.index : row.startIndex,
+    activate: (row) => {
+      if (row.kind === "event") return { type: "select", value: row.entry.index };
+      if (expandedGroups.has(row.startIndex)) expandedGroups.delete(row.startIndex);
+      else expandedGroups.add(row.startIndex);
+      rows = buildTreeRows(entries, expandedGroups);
+      return {
+        type: "update",
+        items: rows,
+        selected: rows.findIndex(
+          (candidate) => candidate.kind === "tool_group" && candidate.startIndex === row.startIndex,
+        ),
+      };
+    },
+    footer: "↑/↓ navigate · enter expand/branch · esc cancel",
   }, io);
 }

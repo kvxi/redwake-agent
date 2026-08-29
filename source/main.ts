@@ -12,6 +12,7 @@ import { ConversationState, type ConversationEntry } from "./session/conversatio
 import { selectTreeNode } from "./session/tree-ui.ts";
 import { SessionNavigator, type SessionSummary } from "./session/navigator.ts";
 import { selectSession } from "./session/sessions-ui.ts";
+import { ProgressRenderer } from "./ui/progress-renderer.ts";
 
 export interface ReplIO {
   /** Prompt for a line; resolves to null at end-of-input. */
@@ -287,13 +288,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   stdout.write(`Session: ${store.path}${resumePath ? ` (resumed ${initialEvents.length} events)` : ""}\n`);
 
   const rl = createInterface({ input: stdin, output: stdout });
+  const terminalOutput = stdout.isTTY === true;
+  const withoutAnsi = (text: string) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
   const io: ReplIO = {
     question: (prompt, initialText) => {
-      const answer = rl.question(prompt).catch(() => null);
+      const answer = rl.question(terminalOutput ? prompt : withoutAnsi(prompt)).catch(() => null);
       if (initialText) rl.write(initialText);
       return answer;
     },
-    write: (text) => stdout.write(text),
+    write: (text) => stdout.write(terminalOutput ? text : withoutAnsi(text)),
     close: () => rl.close(),
   };
   if (stdin.isTTY) {
@@ -320,21 +323,30 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     : savedSelection?.provider ?? PROVIDER;
   const startupModel = process.env.MODEL
     ?? (savedSelection?.provider === startupProvider ? savedSelection.model : modelFor(startupProvider));
+  const renderer = new ProgressRenderer({
+    write: (text) => stdout.write(text),
+    isTTY: stdout.isTTY === true,
+  });
   const createAgent = createAgentFactory({
     ctx: createToolContext(),
     conversation,
     credentials: auth.credentials,
+    progress: (event) => renderer.handle(event),
   });
   const catalog = new ModelCatalog(auth.credentials, auth.store);
-  await runRepl({
-    provider: startupProvider,
-    initialModel: startupModel,
-    createAgent,
-    modelFor,
-    saveModelSelection: (provider, model) => auth.store.putModelSelection(provider, model),
-    conversation,
-    sessions,
-    auth,
-    discoverCodexModels: () => catalog.discover(true),
-  }, io);
+  try {
+    await runRepl({
+      provider: startupProvider,
+      initialModel: startupModel,
+      createAgent,
+      modelFor,
+      saveModelSelection: (provider, model) => auth.store.putModelSelection(provider, model),
+      conversation,
+      sessions,
+      auth,
+      discoverCodexModels: () => catalog.discover(true),
+    }, io);
+  } finally {
+    renderer.dispose();
+  }
 }
