@@ -40,14 +40,18 @@ export class AnthropicAgent extends AgentBase<Message, ToolResultBlockParam> {
     this.messages = toAnthropicHistory(this.conversation.snapshot(600_000));
   }
 
-  createMessage(system?: string): Promise<Message> {
-    return this.client.messages.create({
+  private messageParams(system?: string): Anthropic.MessageCreateParamsNonStreaming {
+    return {
       model: this.model,
       max_tokens: MAX_TOKENS,
       messages: this.messages,
       system: system ?? buildSystemPrompt({ cwd: process.cwd() }),
       tools: this.anthropicTools,
-    });
+    };
+  }
+
+  createMessage(system?: string): Promise<Message> {
+    return this.client.messages.create(this.messageParams(system));
   }
 
   protected appendUser(userMessage: string): void {
@@ -55,7 +59,11 @@ export class AnthropicAgent extends AgentBase<Message, ToolResultBlockParam> {
   }
 
   protected request(): Promise<Message> {
-    return this.createMessage();
+    // Keep compatibility with lightweight clients that implement only create().
+    if (typeof this.client.messages.stream !== "function") return this.createMessage();
+    const stream = this.client.messages.stream(this.messageParams());
+    stream.on("text", (delta) => this.emitTextDelta(delta));
+    return stream.finalMessage();
   }
 
   protected remember(message: Message): void {

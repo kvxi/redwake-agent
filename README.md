@@ -31,6 +31,9 @@ bun run source/client.ts /path/to/project          # target another project
 ```
 
 Type a message at the `>` prompt; submit an empty line (or Ctrl-D) to exit.
+Responses stream as they are generated, and concise progress lines show tool activity.
+Full tool results remain internal to the model and session; bash output is buffered until
+its command completes.
 
 Use `/model` to select Anthropic, OpenAI, or authenticated ChatGPT Codex without
 sending a model message. Canonical history and tool state are retained. The last
