@@ -33,19 +33,25 @@ bun run source/client.ts /path/to/project          # target another project
 Type a message at the `>` prompt; submit an empty line (or Ctrl-D) to exit.
 
 Use `/model` to select Anthropic, OpenAI, or authenticated ChatGPT Codex without
-sending a model message. Canonical history and tool state are retained.
+sending a model message. Canonical history and tool state are retained. The last
+selection is restored on future startups; an explicit `PROVIDER` or `MODEL`
+environment setting overrides it for that startup.
+
+Use `/status` to display the active model, session name, and number of events in
+the active session.
 
 ChatGPT OAuth commands are local and never enter session history:
 
 ```text
 /login openai-codex             # browser PKCE login (localhost:1455 callback)
 /login openai-codex --device    # headless/device login
-/status openai-codex
+/status openai-codex            # stored ChatGPT account status
 /logout openai-codex [account-id]
 ```
 
-Credentials are stored globally in `~/redwake/agent/auth.sqlite` with user-only
-filesystem permissions, not in a project `.env` or session JSONL. Multiple
+Credentials and the last model selection are stored globally in
+`~/redwake/agent/auth.sqlite` with user-only filesystem permissions, not in a
+project `.env` or session JSONL. Multiple
 workspaces are supported and exhausted workspaces may be routed around. ChatGPT
 subscription limits apply only to `openai-codex`; Redwake never falls back from
 it to the billable OpenAI API. If callback port 1455 is occupied, use device

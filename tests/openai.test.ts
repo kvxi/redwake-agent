@@ -44,6 +44,7 @@ describe("OpenAIAgent.createResponse", () => {
     expect(request.model).toBe(model);
     expect(request.max_output_tokens).toBe(MAX_TOKENS);
     expect(request.instructions.length).toBeGreaterThan(0);
+    expect(request.instructions).toContain(`Current working directory: ${process.cwd()}`);
     expect(request.tools.map((tool) => tool.name).sort()).toEqual([
       "bash",
       "edit",

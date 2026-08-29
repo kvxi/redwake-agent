@@ -69,7 +69,7 @@ describe("AnthropicAgent.createMessage", () => {
     const arg = create.mock.calls[0]![0] as Anthropic.MessageCreateParams;
     expect((arg.tools ?? []).map((tool) => tool.name).sort()).toEqual(TOOL_NAMES);
     expect(typeof arg.system).toBe("string");
-    expect((arg.system as string).length).toBeGreaterThan(0);
+    expect((arg.system as string)).toContain(`Current working directory: ${process.cwd()}`);
     expect(arg.model).toBe(model);
     expect(arg.max_tokens).toBe(MAX_TOKENS);
   });
@@ -77,7 +77,7 @@ describe("AnthropicAgent.createMessage", () => {
 
 describe("buildSystemPrompt", () => {
   test("substitutes context placeholders and lists tools", () => {
-    const prompt = buildSystemPrompt();
+    const prompt = buildSystemPrompt({ cwd: process.cwd() });
     expect(prompt).not.toContain("{cwd}");
     expect(prompt).not.toContain("{current_date}");
     expect(prompt).not.toContain("{custom_system.md}");
