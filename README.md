@@ -1,6 +1,6 @@
 # redwake-coding-agent
 
-Redwake Coding Agent: My take on a minimalist coding agent. Right now, running it carries a mild security risk since sandboxing and hardcoded command allowlist is not yet implemented. The agent can run bash commands with only minimal guard rails. Future roadmap: harden security, TUI with history navigation, auto model usage to imrpove cost efficiency, and multi sub agents. 
+Redwake Coding Agent: My take on a minimalist coding agent. Right now, running it carries a mild security risk since sandboxing and a hardcoded command allowlist are not yet implemented. The agent can run bash commands with only minimal guard rails. Future roadmap: harden security, improve model cost efficiency, and add multiple sub-agents.
 
 # Cool stuff you can do
 
@@ -28,12 +28,27 @@ bun run start                                      # Anthropic (default)
 PROVIDER=openai MODEL=gpt-5.6 bun run start        # billed OpenAI API
 PROVIDER=openai-codex bun run start                 # ChatGPT subscription
 bun run source/client.ts /path/to/project          # target another project
+bun run start -- --resume ./session.jsonl          # resume a session
+bun run start -- --no-tui                          # force line-oriented output
+bun run start -- --debug                           # plain output plus startup internals
 ```
 
-Type a message at the `>` prompt; submit an empty line (or Ctrl-D) to exit.
-Responses stream as they are generated, and concise progress lines show tool activity.
+On an interactive terminal Redwake uses a full-screen UI with a scrolling transcript,
+bordered single-line editor, and persistent activity/model/session status. Enter submits;
+a blank message or Ctrl-D on an empty editor exits. Ctrl-A/E move to the start/end,
+Ctrl-U/K delete to the start/end, Page Up/Page Down scroll output, and End resumes
+following streamed output. `/tree` and `/sessions` open keyboard-driven overlays;
+use Up/Down, Enter, Esc, or Ctrl-C.
+
+Redirected input/output, `TERM=dumb`, `--no-tui`, and `--debug` use deterministic,
+ANSI-free line output. `NO_COLOR` disables TUI color while retaining layout. Normal
+startup shows a product-facing session label and hides its internal JSONL path;
+`--debug` prints the full path and startup metadata.
+
+Responses stream as they are generated, and concise progress rows show tool activity.
 Full tool results remain internal to the model and session; bash output is buffered until
-its command completes.
+its command completes. The status activity is `idle`, `thinking`, `responding`, or
+`running`; reasoning effort is shown only when supplied by real runtime state.
 
 Use `/model` to select Anthropic, OpenAI, or authenticated ChatGPT Codex without
 sending a model message. Canonical history and tool state are retained. The last
