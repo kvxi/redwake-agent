@@ -6,11 +6,11 @@ import { runRepl } from "../source/main.ts";
 function fakeIO(inputs: Array<string | null>) {
   let index = 0;
   const writes: string[] = [];
-  const question = mock(async (_prompt: string) => inputs[index++] ?? null);
+  const question = mock(async (_request: { kind: "message" | "choice"; label: string; initialText?: string }) => inputs[index++] ?? null);
   return {
     io: {
-      question,
-      write: (text: string) => writes.push(text),
+      readLine: question,
+      append: (message: { text: string }) => writes.push(`${message.text}\n`),
       close: () => {},
     },
     writes,
@@ -53,11 +53,7 @@ describe("runRepl slash commands", () => {
     expect(anthropic.runTurn).not.toHaveBeenCalled();
     expect(openai.runTurn).toHaveBeenCalledWith("explain this");
     expect(writes).toEqual([
-      "\x1b[0m",
-      "\x1b[0m",
       "Switched to openai using gpt-5.6. Conversation retained.\n",
-      "\x1b[0m",
-      "\x1b[0m",
     ]);
   });
 
@@ -143,11 +139,7 @@ describe("runRepl slash commands", () => {
     expect(createAgent).toHaveBeenCalledTimes(1);
     expect(agent.runTurn).toHaveBeenCalledWith("continue");
     expect(writes).toEqual([
-      "\x1b[0m",
-      "\x1b[0m",
       "Model selection canceled.\n",
-      "\x1b[0m",
-      "\x1b[0m",
     ]);
   });
 
@@ -164,10 +156,7 @@ describe("runRepl slash commands", () => {
     expect(createAgent).toHaveBeenCalledTimes(1);
     expect(agent.runTurn).not.toHaveBeenCalled();
     expect(writes).toEqual([
-      "\x1b[0m",
-      "\x1b[0m",
       "Invalid provider. Choose anthropic or openai or openai-codex.\n",
-      "\x1b[0m",
     ]);
   });
 
@@ -183,9 +172,7 @@ describe("runRepl slash commands", () => {
 
     expect(agent.runTurn).not.toHaveBeenCalled();
     expect(writes).toEqual([
-      "\x1b[0m",
       "Unknown command: /help. Available commands: /model, /tree, /sessions, /login, /logout, /status\n",
-      "\x1b[0m",
     ]);
   });
 
@@ -256,7 +243,7 @@ describe("runRepl slash commands", () => {
 });
 
 describe("runRepl prompts", () => {
-  test("colors and bolds input until the line is submitted", async () => {
+  test("uses structured message requests without presentation ANSI", async () => {
     const agent = { runTurn: mock(async (_message: string) => {}) };
     const { options } = fakeRuntime({
       anthropic: agent,
@@ -267,9 +254,8 @@ describe("runRepl prompts", () => {
     await runRepl(options, io);
 
     expect(question.mock.calls).toEqual([
-      ["\x1b[1;31m> "],
-      ["\x1b[1;31m> "],
+      [{ kind: "message", label: ">" }],
+      [{ kind: "message", label: ">" }],
     ]);
-    expect(writes).toEqual(["\x1b[0m", "\x1b[0m"]);
   });
 });

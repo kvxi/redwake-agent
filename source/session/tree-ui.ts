@@ -1,8 +1,5 @@
-import { emitKeypressEvents } from "node:readline";
-import { stdin as defaultInput, stdout as defaultOutput } from "node:process";
 import type { ConversationEntry } from "./conversation-state.ts";
-
-const ANSI_ESCAPE = /\x1B(?:[@-_]|\[[0-?]*[ -/]*[@-~])/g;
+import { sanitizeSingleLine, truncateEnd } from "../ui/terminal-text.ts";
 
 export interface TreeRowOptions {
   width?: number;
@@ -18,24 +15,12 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function cleanPreview(text: string): string {
-  return text
-    .replace(ANSI_ESCAPE, "")
-    .replace(/[\n\r\t]+/g, " ")
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+function cleanPreview(text: string): string { return sanitizeSingleLine(text); }
 
-function truncate(text: string, width: number): string {
-  if (width <= 0) return "";
-  if (text.length <= width) return text;
-  if (width === 1) return "…";
-  return `${text.slice(0, width - 1)}…`;
-}
+function truncate(text: string, width: number): string { return truncateEnd(text, width); }
 
 const BOLD_RED = "\x1b[1;31m";
-const BOLD_BLUE = "\x1b[1;34m";
+const BOLD_BLUE = "\x1b[1;33m";
 const RESET_STYLE = "\x1b[0m";
 
 /** Format one inert, single-line event preview suitable for terminal painting. */
@@ -107,11 +92,6 @@ export function nextSelection(state: TreeSelectionState, key: TreeSelectionKey):
   return { selected, offset, itemCount, rowCount, outcome };
 }
 
-interface Keypress {
-  name?: string;
-  ctrl?: boolean;
-}
-
 export interface TreeSelectorIO {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
@@ -120,15 +100,6 @@ export interface TreeSelectorIO {
   resume?: () => void;
   columns?: number;
   rows?: number;
-}
-
-function keyName(key: Keypress): TreeSelectionKey | null {
-  if (key.ctrl && key.name === "c") return "ctrl-c";
-  if (key.name === "up") return "up";
-  if (key.name === "down") return "down";
-  if (key.name === "return" || key.name === "enter") return "enter";
-  if (key.name === "escape") return "escape";
-  return null;
 }
 
 export type ListActivation<T, R> =
@@ -143,97 +114,15 @@ export interface ListSelectorOptions<T, R> {
   activate?: (item: T, index: number) => ListActivation<T, R>;
 }
 
-/** Shared raw-terminal list selector used by both /tree and /sessions. */
+/** Legacy compatibility shim. Interactive list ownership now belongs to TuiApp. */
 export async function selectListItem<T, R>(
-  items: readonly T[],
-  options: ListSelectorOptions<T, R>,
-  io: TreeSelectorIO = {},
+  _items: readonly T[],
+  _options: ListSelectorOptions<T, R>,
+  _io: TreeSelectorIO = {},
 ): Promise<R | null> {
-  if (items.length === 0) return null;
-  const input = io.input ?? defaultInput;
-  const output = io.output ?? defaultOutput;
-  const write = io.write ?? ((text: string) => output.write(text));
-  if (!input.isTTY) return null;
-
-  const columns = Math.max(20, io.columns ?? output.columns ?? 80);
-  const terminalRows = Math.max(4, io.rows ?? output.rows ?? 24);
-  const rowCount = Math.max(1, terminalRows - 2);
-  let currentItems = [...items];
-  let state: TreeSelectionState = {
-    selected: currentItems.length - 1,
-    offset: Math.max(0, currentItems.length - rowCount),
-    itemCount: currentItems.length,
-    rowCount,
-  };
-  let paintedLines = 0;
-
-  const paint = () => {
-    if (paintedLines > 0) write(`\x1b[${paintedLines}F`);
-    write("\x1b[0m");
-    const visible = currentItems.slice(state.offset, state.offset + rowCount);
-    const lines = visible.map((item, index) =>
-      `\x1b[2K${options.format(item, { width: columns, selected: state.offset + index === state.selected })}`,
-    );
-    lines.push(`\x1b[2K${options.footer}`);
-    write(`${lines.join("\n")}\n`);
-    paintedLines = lines.length;
-  };
-
-  const wasRaw = Boolean(input.isRaw);
-  io.pause?.();
-  emitKeypressEvents(input);
-  input.setRawMode?.(true);
-  input.resume();
-  write("\x1b[?25l");
-
-  try {
-    paint();
-    return await new Promise<R | null>((resolve) => {
-      const finish = (value: R | null) => {
-        input.off("keypress", onKeypress);
-        resolve(value);
-      };
-      const onKeypress = (_text: string, key: Keypress) => {
-        const name = keyName(key);
-        if (!name) return;
-        const next = nextSelection(state, name);
-        state = next;
-        if (next.outcome === "confirm") {
-          const item = currentItems[next.selected];
-          if (item === undefined) {
-            finish(null);
-          } else {
-            const activation = options.activate?.(item, next.selected);
-            if (!activation) {
-              finish(options.value(item));
-            } else if (activation.type === "select") {
-              finish(activation.value);
-            } else {
-              currentItems = [...activation.items];
-              const selected = Math.min(
-                Math.max(0, activation.selected ?? next.selected),
-                Math.max(0, currentItems.length - 1),
-              );
-              const normalized = nextSelection({
-                ...state,
-                selected,
-                itemCount: currentItems.length,
-              }, "enter");
-              state = normalized;
-              paint();
-            }
-          }
-        } else if (next.outcome === "cancel") finish(null);
-        else paint();
-      };
-      input.on("keypress", onKeypress);
-    });
-  } finally {
-    input.setRawMode?.(wasRaw);
-    write("\x1b[?25h\x1b[0m");
-    input.pause();
-    io.resume?.();
-  }
+  // PlainReplIO provides a deterministic numbered selection; TuiApp hosts the
+  // interactive overlay. Session modules no longer acquire raw terminal state.
+  return null;
 }
 
 export type TreeDisplayRow =
@@ -308,8 +197,7 @@ export async function selectTreeNode(
   io: TreeSelectorIO = {},
 ): Promise<number | null> {
   if (entries.length === 0) {
-    const output = io.output ?? defaultOutput;
-    (io.write ?? ((text: string) => output.write(text)))("Session tree is empty.\n");
+    (io.write ?? ((text: string) => io.output?.write(text)))("Session tree is empty.\n");
     return null;
   }
 

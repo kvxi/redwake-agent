@@ -1,5 +1,4 @@
 // Parses args, resolves the working directory, and runs the interactive agent.
-import { createInterface } from "node:readline/promises";
 import { chdir, stdin, stdout } from "node:process";
 import { resolve } from "node:path";
 import { modelFor, parseProvider, PROVIDER, PROVIDERS, type Provider } from "./config.ts";
@@ -9,15 +8,21 @@ import { ModelCatalog, type ModelDescriptor } from "./codex/models.ts";
 import { createToolContext } from "./tools/context.ts";
 import { createSessionStore, SessionStore } from "./session/store.ts";
 import { ConversationState, type ConversationEntry } from "./session/conversation-state.ts";
-import { selectTreeNode } from "./session/tree-ui.ts";
 import { SessionNavigator, type SessionSummary } from "./session/navigator.ts";
-import { selectSession } from "./session/sessions-ui.ts";
 import { ProgressRenderer } from "./ui/progress-renderer.ts";
+import { PlainReplIO } from "./ui/plain-repl-io.ts";
+import { TuiApp } from "./ui/tui-app.ts";
+import type { NoticeTone, TuiIdentity } from "./ui/tui-state.ts";
+
+export interface InputRequest {
+  kind: "message" | "choice";
+  label: string;
+  initialText?: string;
+}
 
 export interface ReplIO {
-  /** Prompt for a line; resolves to null at end-of-input. */
-  question(prompt: string, initialText?: string): Promise<string | null>;
-  write(text: string): void;
+  readLine(request: InputRequest): Promise<string | null>;
+  append(message: { text: string; tone?: NoticeTone }): void;
   close(): void;
   showTree?(entries: readonly ConversationEntry[]): Promise<number | null>;
   showSessions?(sessions: readonly SessionSummary[]): Promise<string | null>;
@@ -44,11 +49,9 @@ export interface ReplOptions {
   sessions?: SessionNavigation;
   auth?: AuthService;
   discoverCodexModels?: () => Promise<ModelDescriptor[]>;
+  onRuntimeChange?: (patch: Partial<TuiIdentity>) => void;
 }
 
-
-const USER_INPUT_STYLE = "\x1b[1;31m";
-const RESET_STYLE = "\x1b[0m";
 
 /**
  * Interactive read-eval loop. Exits on a blank line or end-of-input without
@@ -67,24 +70,25 @@ export async function runRepl(
   const rebuildAgent = () => { agent = options.createAgent({ provider, model }); };
   const ensureAgent = () => { if (!agent) rebuildAgent(); return agent!; };
 
-  const question = async (prompt: string, initialText?: string): Promise<string | null> => {
-    const styledPrompt = `${USER_INPUT_STYLE}${prompt}`;
-    const answer = initialText
-      ? await io.question(styledPrompt, initialText)
-      : await io.question(styledPrompt);
-    io.write(RESET_STYLE);
-    return answer;
+  const question = (label: string, initialText?: string, kind: InputRequest["kind"] = "choice"): Promise<string | null> =>
+    io.readLine({ kind, label: label.trimEnd(), ...(initialText ? { initialText } : {}) });
+  const emit = (text: string, tone?: NoticeTone): void => {
+    const clean = text.replace(/\n+$/, "");
+    const inferred = tone ?? (/^(Could not|Invalid|Not authenticated|Unknown|Auth commands|Session .*not available)/i.test(clean) ? "error"
+      : /^(Switched|Logged in|Logged out|Continued|Branched)/i.test(clean) ? "success"
+      : /canceled|discarded/i.test(clean) ? "warning" : "info");
+    io.append({ text: clean, tone: inferred });
   };
 
   try {
     while (true) {
       const prefill = pendingEditorText;
       pendingEditorText = "";
-      const userMessage = await question("> ", prefill || undefined);
+      const userMessage = await question("> ", prefill || undefined, "message");
       if (userMessage === null) return;
       if (userMessage === "") {
         if (prefill) {
-          io.write("Message discarded; branch kept.\n");
+          emit("Message discarded; branch kept.\n");
           continue;
         }
         return;
@@ -104,7 +108,7 @@ export async function runRepl(
             // Model status remains useful if session metadata cannot be read.
           }
         }
-        io.write(`Active model: ${model} (${provider})\nSession: ${sessionName}\nSession events: ${eventCount}\n`);
+        emit(`Active model: ${model} (${provider})\nSession: ${sessionName}\nSession events: ${eventCount}\n`);
         continue;
       }
 
@@ -113,73 +117,74 @@ export async function runRepl(
           `Provider [${PROVIDERS.join("/")}] (current: ${provider}): `,
         );
         if (!choice) {
-          io.write("Model selection canceled.\n");
+          emit("Model selection canceled.\n");
           continue;
         }
 
         const selected = parseProvider(choice);
         if (!selected) {
-          io.write(`Invalid provider. Choose ${PROVIDERS.join(" or ")}.\n`);
+          emit(`Invalid provider. Choose ${PROVIDERS.join(" or ")}.\n`);
           continue;
         }
         let selectedModel = options.modelFor(selected);
         if (selected === "openai-codex") {
-          if (!options.auth) { io.write("ChatGPT authentication is unavailable. Run /login openai-codex.\n"); continue; }
+          if (!options.auth) { emit("ChatGPT authentication is unavailable. Run /login openai-codex.\n"); continue; }
           const statuses = await options.auth.status();
-          if (!statuses.some((entry) => !entry.disabled)) { io.write("Not authenticated. Run /login openai-codex.\n"); continue; }
+          if (!statuses.some((entry) => !entry.disabled)) { emit("Not authenticated. Run /login openai-codex.\n"); continue; }
           try {
             const models = await options.discoverCodexModels?.() ?? [];
             if (models.length) {
               const ids = models.map((entry) => entry.id);
               const answer = await question(`Model [${ids.join("/")}] (default: ${ids[0]}): `);
-              if (answer?.trim() && !ids.includes(answer.trim())) { io.write("Invalid Codex model.\n"); continue; }
+              if (answer?.trim() && !ids.includes(answer.trim())) { emit("Invalid Codex model.\n"); continue; }
               selectedModel = answer?.trim() || ids[0]!;
             }
-          } catch (error) { io.write(`Could not discover Codex models: ${error instanceof Error ? error.message : String(error)}\n`); continue; }
+          } catch (error) { emit(`Could not discover Codex models: ${error instanceof Error ? error.message : String(error)}\n`); continue; }
         }
         if (selected === provider && selectedModel === model) {
           options.saveModelSelection?.(provider, model);
-          io.write(`Already using ${provider} with ${model}. Conversation retained.\n`);
+          emit(`Already using ${provider} with ${model}. Conversation retained.\n`);
           continue;
         }
         provider = selected;
         model = selectedModel;
         rebuildAgent();
         options.saveModelSelection?.(provider, model);
-        io.write(`Switched to ${provider} using ${model}. Conversation retained.\n`);
+        options.onRuntimeChange?.({ provider, model });
+        emit(`Switched to ${provider} using ${model}. Conversation retained.\n`);
         continue;
       }
 
       if (userMessage.startsWith("/login ") || userMessage.startsWith("/logout ") || userMessage.startsWith("/status ")) {
         const parts = userMessage.trim().split(/\s+/);
         const command = parts[0];
-        if (parts[1] !== "openai-codex" || !options.auth) { io.write("Auth commands support only openai-codex.\n"); continue; }
+        if (parts[1] !== "openai-codex" || !options.auth) { emit("Auth commands support only openai-codex.\n"); continue; }
         try {
           if (command === "/login") {
-            const status = await options.auth.login(parts.includes("--device"), (message) => io.write(`${message}\n`));
-            io.write(`Logged in: ${status.identity}${status.planType ? ` (${status.planType})` : ""}.\n`);
+            const status = await options.auth.login(parts.includes("--device"), (message) => emit(`${message}\n`));
+            emit(`Logged in: ${status.identity}${status.planType ? ` (${status.planType})` : ""}.\n`);
             if (provider === "openai-codex") rebuildAgent();
           } else if (command === "/logout") {
             const removed = await options.auth.logout(parts[2]);
-            io.write(removed ? "Logged out.\n" : "Account not found.\n");
+            emit(removed ? "Logged out.\n" : "Account not found.\n");
             if (provider === "openai-codex") agent = undefined;
           } else {
             const statuses = await options.auth.status();
-            if (!statuses.length) io.write("No ChatGPT subscription accounts are logged in.\n");
-            for (const status of statuses) io.write(`${status.identity}: ${status.disabled ? "disabled" : "ready"}${status.planType ? `, ${status.planType}` : ""}\n`);
+            if (!statuses.length) emit("No ChatGPT subscription accounts are logged in.\n");
+            for (const status of statuses) emit(`${status.identity}: ${status.disabled ? "disabled" : "ready"}${status.planType ? `, ${status.planType}` : ""}\n`);
           }
-        } catch (error) { io.write(`${error instanceof Error ? error.message : String(error)}\n`); }
+        } catch (error) { emit(`${error instanceof Error ? error.message : String(error)}\n`); }
         continue;
       }
 
       if (userMessage === "/tree") {
         if (!options.conversation || !io.showTree) {
-          io.write("Session tree is not available in this session.\n");
+          emit("Session tree is not available in this session.\n");
           continue;
         }
         const entries = options.conversation.entries();
         if (entries.length === 0) {
-          io.write("Session tree is empty.\n");
+          emit("Session tree is empty.\n");
           continue;
         }
 
@@ -190,24 +195,25 @@ export async function runRepl(
           index = null;
         }
         if (index === null) {
-          io.write("Branch canceled.\n");
+          emit("Branch canceled.\n");
           continue;
         }
         const selected = entries.find((entry) => entry.index === index);
         if (!selected) {
-          io.write("Could not branch: session history is inconsistent.\n");
+          emit("Could not branch: session history is inconsistent.\n");
           continue;
         }
         const branchIndex = selected.event.type === "user"
           ? (index === 0 ? null : index - 1)
           : index;
         if (!options.conversation.branchTo(branchIndex)) {
-          io.write("Could not branch: session history is inconsistent.\n");
+          emit("Could not branch: session history is inconsistent.\n");
           continue;
         }
         if (selected.event.type === "user") pendingEditorText = selected.event.content;
         rebuildAgent();
-        io.write(branchIndex === null
+        options.onRuntimeChange?.({ eventCount: options.conversation.entries().length });
+        emit(branchIndex === null
           ? "Branched to the start of the session.\n"
           : `Branched to session entry ${branchIndex + 1}.\n`);
         continue;
@@ -215,18 +221,18 @@ export async function runRepl(
 
       if (userMessage === "/sessions") {
         if (!options.sessions || !io.showSessions) {
-          io.write("Session selection is not available in this session.\n");
+          emit("Session selection is not available in this session.\n");
           continue;
         }
         let sessions: SessionSummary[];
         try {
           sessions = options.sessions.list();
         } catch (error) {
-          io.write(`Could not list sessions: ${error instanceof Error ? error.message : String(error)}\n`);
+          emit(`Could not list sessions: ${error instanceof Error ? error.message : String(error)}\n`);
           continue;
         }
         if (sessions.length === 0) {
-          io.write("No sessions found for this workspace.\n");
+          emit("No sessions found for this workspace.\n");
           continue;
         }
         let path: string | null;
@@ -236,102 +242,109 @@ export async function runRepl(
           path = null;
         }
         if (path === null) {
-          io.write("Session selection canceled.\n");
+          emit("Session selection canceled.\n");
           continue;
         }
         try {
           const result = options.sessions.activate(path);
           if (result.status === "already-active") {
-            io.write("That session is already active.\n");
+            emit("That session is already active.\n");
             continue;
           }
           pendingEditorText = "";
           rebuildAgent();
-          const name = sessions.find((session) => session.path === path)?.name ?? path;
-          io.write(`Continued ${name} (${result.eventCount} events).\n`);
+          const summary = sessions.find((session) => session.path === path);
+          const name = summary?.name ?? path;
+          options.onRuntimeChange?.({ sessionName: name, sessionNumber: summary?.number, eventCount: result.eventCount });
+          emit(`Continued ${name} (${result.eventCount} events).\n`);
         } catch (error) {
-          io.write(`Could not continue session: ${error instanceof Error ? error.message : String(error)}\n`);
+          emit(`Could not continue session: ${error instanceof Error ? error.message : String(error)}\n`);
         }
         continue;
       }
 
       if (userMessage.startsWith("/")) {
-        io.write(`Unknown command: ${userMessage}. Available commands: /model, /tree, /sessions, /login, /logout, /status\n`);
+        emit(`Unknown command: ${userMessage}. Available commands: /model, /tree, /sessions, /login, /logout, /status\n`);
         continue;
       }
 
       await ensureAgent().runTurn(userMessage);
+      options.onRuntimeChange?.({ eventCount: options.conversation?.entries().length ?? 0 });
     }
   } finally {
     io.close();
   }
 }
 
-export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-  const args = [...argv];
-  const resumeIndex = args.indexOf("--resume");
+export interface CliArguments {
+  resumePath?: string;
+  cwd?: string;
+  noTui: boolean;
+  debug: boolean;
+}
+
+export function parseArguments(argv: readonly string[]): CliArguments {
   let resumePath: string | undefined;
-  if (resumeIndex >= 0) {
-    resumePath = args[resumeIndex + 1];
-    if (!resumePath) throw new Error("--resume requires a session JSONL path");
-    resumePath = resolve(resumePath);
-    args.splice(resumeIndex, 2);
+  let cwd: string | undefined;
+  let noTui = false;
+  let debug = false;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!;
+    if (arg === "--resume") {
+      const path = argv[++index];
+      if (!path) throw new Error("--resume requires a session JSONL path");
+      resumePath = resolve(path);
+    } else if (arg === "--no-tui") noTui = true;
+    else if (arg === "--debug") debug = true;
+    else if (arg.startsWith("--")) throw new Error(`Unknown option: ${arg}`);
+    else if (!cwd) cwd = arg;
+    else throw new Error(`Unexpected argument: ${arg}`);
   }
-  const cwd = args[0];
-  if (cwd) chdir(cwd);
+  return { ...(resumePath ? { resumePath } : {}), ...(cwd ? { cwd } : {}), noTui, debug };
+}
 
-  const store = resumePath
-    ? new SessionStore(resumePath)
-    : createSessionStore();
-  const initialRecords = resumePath ? store.loadPathRecords() : [];
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const args = parseArguments(argv);
+  if (args.cwd) chdir(args.cwd);
+
+  const store = args.resumePath ? new SessionStore(args.resumePath) : createSessionStore();
+  const initialRecords = args.resumePath ? store.loadPathRecords() : [];
   const initialEvents = initialRecords.map((record) => record.event);
-  stdout.write(`Session: ${store.path}${resumePath ? ` (resumed ${initialEvents.length} events)` : ""}\n`);
-
-  const rl = createInterface({ input: stdin, output: stdout });
-  const terminalOutput = stdout.isTTY === true;
-  const withoutAnsi = (text: string) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-  const io: ReplIO = {
-    question: (prompt, initialText) => {
-      const answer = rl.question(terminalOutput ? prompt : withoutAnsi(prompt)).catch(() => null);
-      if (initialText) rl.write(initialText);
-      return answer;
-    },
-    write: (text) => stdout.write(terminalOutput ? text : withoutAnsi(text)),
-    close: () => rl.close(),
-  };
-  if (stdin.isTTY) {
-    const selectorIO = {
-      input: stdin,
-      output: stdout,
-      pause: () => rl.pause(),
-      resume: () => rl.resume(),
-    };
-    io.showTree = (entries) => selectTreeNode(entries, selectorIO);
-    io.showSessions = (sessions) => selectSession(sessions, selectorIO);
-  }
-  const conversation = new ConversationState(
-    store,
-    initialEvents,
-    initialRecords.map((record) => record.id),
-  );
+  const conversation = new ConversationState(store, initialEvents, initialRecords.map((record) => record.id));
   const sessions = new SessionNavigator(conversation, store);
   const auth = new CodexAuthService();
   const savedSelection = auth.store.getModelSelection();
-  // Explicit environment configuration wins; otherwise restore the last /model choice.
   const startupProvider = process.env.PROVIDER || process.env.MODEL
     ? PROVIDER
     : savedSelection?.provider ?? PROVIDER;
   const startupModel = process.env.MODEL
     ?? (savedSelection?.provider === startupProvider ? savedSelection.model : modelFor(startupProvider));
-  const renderer = new ProgressRenderer({
-    write: (text) => stdout.write(text),
-    isTTY: stdout.isTTY === true,
-  });
+
+  const active = sessions.list().find((session) => session.active);
+  const identity: TuiIdentity = {
+    provider: startupProvider,
+    model: startupModel,
+    cwd: process.cwd(),
+    sessionName: active?.name ?? `session-${active?.number ?? "new"}`,
+    sessionNumber: active?.number,
+    eventCount: initialEvents.length,
+  };
+  const useTui = !args.noTui && !args.debug && stdin.isTTY === true && stdout.isTTY === true && process.env.TERM !== "dumb";
+  const io: ReplIO = useTui ? new TuiApp({ identity }) : new PlainReplIO(stdin, stdout);
+  if (args.debug) {
+    stdout.write(`Session: ${store.path}${args.resumePath ? ` (resumed ${initialEvents.length} events)` : ""}\n`);
+    stdout.write(`Startup: ${startupProvider}/${startupModel} · cwd ${process.cwd()} · plain debug mode\n`);
+  } else if (!useTui) {
+    stdout.write(`Redwake · ${startupModel} (${startupProvider}) · ${identity.sessionNumber ? `session ${identity.sessionNumber}` : identity.sessionName} · ${identity.eventCount ? `${identity.eventCount} events` : "new"}\n`);
+  }
+
+  const renderer = useTui ? undefined : new ProgressRenderer({ write: (text) => stdout.write(text), isTTY: false });
+  const tui = useTui ? io as TuiApp : undefined;
   const createAgent = createAgentFactory({
     ctx: createToolContext(),
     conversation,
     credentials: auth.credentials,
-    progress: (event) => renderer.handle(event),
+    progress: (event) => tui ? tui.handleProgress(event) : renderer?.handle(event),
   });
   const catalog = new ModelCatalog(auth.credentials, auth.store);
   try {
@@ -345,8 +358,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       sessions,
       auth,
       discoverCodexModels: () => catalog.discover(true),
+      onRuntimeChange: (patch) => tui?.updateRuntime(patch),
     }, io);
   } finally {
-    renderer.dispose();
+    renderer?.dispose();
+    io.close();
   }
 }

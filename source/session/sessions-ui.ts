@@ -1,17 +1,9 @@
 import type { SessionEvent } from "./conversation-state.ts";
 import type { SessionSummary } from "./navigator.ts";
 import { selectListItem, type TreeRowOptions, type TreeSelectorIO } from "./tree-ui.ts";
+import { sanitizeSingleLine, truncateEnd } from "../ui/terminal-text.ts";
 
-const ANSI_ESCAPE = /\x1B(?:[@-_]|\[[0-?]*[ -/]*[@-~])/g;
-
-function clean(text: string): string {
-  return text
-    .replace(ANSI_ESCAPE, "")
-    .replace(/[\n\r\t]+/g, " ")
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+function clean(text: string): string { return sanitizeSingleLine(text); }
 
 function safeStringify(value: unknown): string {
   try {
@@ -30,19 +22,13 @@ function eventPreview(event: SessionEvent): string {
   }
 }
 
-function truncate(text: string, width: number): string {
-  if (width <= 0) return "";
-  if (text.length <= width) return text;
-  if (width === 1) return "…";
-  return `${text.slice(0, width - 1)}…`;
-}
 
 export function formatSessionRow(summary: SessionSummary, options: TreeRowOptions = {}): string {
   const marker = options.selected ? "❯ " : "  ";
   const active = summary.active ? " · active" : "";
   const preview = summary.preview ? ` · ${eventPreview(summary.preview)}` : "";
   const body = clean(`${summary.name} · ${summary.eventCount} events${active}${preview}`);
-  return truncate(`${marker}${body}`, Math.max(0, options.width ?? 80));
+  return truncateEnd(`${marker}${body}`, Math.max(0, options.width ?? 80));
 }
 
 export async function selectSession(
