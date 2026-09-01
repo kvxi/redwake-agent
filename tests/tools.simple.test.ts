@@ -19,6 +19,18 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+describe("workspace root", () => {
+  test("anchors relative file and shell operations independently of ambient cwd", async () => {
+    const workspace = join(dir, "workspace");
+    await mkdir(workspace);
+    const workspaceContext = createToolContext({ workspaceRoot: workspace });
+    await writeTool.handler({ file_path: "relative.txt", contents: "hello" }, workspaceContext);
+    expect(await readFile(join(workspace, "relative.txt"), "utf8")).toBe("hello");
+    expect(await readTool.handler({ file_path: "relative.txt" }, workspaceContext)).toBe("1: hello");
+    expect(await bashTool.handler({ command: "pwd" }, workspaceContext)).toMatchObject({ stdout: `${workspace}\n`, exit_code: 0 });
+  });
+});
+
 describe("read", () => {
   test("numbers lines and honors view_range", async () => {
     const file = join(dir, "f.txt");

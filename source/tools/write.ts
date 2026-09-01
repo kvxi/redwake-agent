@@ -13,7 +13,7 @@ export async function writeText(
   contents: string,
   ctx: ToolContext,
 ): Promise<string> {
-  const path = resolve(filePath);
+  const path = resolve(ctx.workspaceRoot, filePath);
 
   const stats = await stat(path).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return null;

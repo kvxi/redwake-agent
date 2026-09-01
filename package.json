@@ -1,11 +1,19 @@
 {
-  "name": "redwake-coding-agent",
+  "name": "redwake-agent",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "module": "source/client.ts",
+  "module": "source/cli.ts",
+  "bin": {
+    "rwa": "./source/cli.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kvxi/redwake-agent.git"
+  },
   "scripts": {
-    "start": "bun run source/client.ts",
+    "start": "bun run source/cli.ts",
+    "build": "mkdir -p dist && bun build ./source/cli.ts --compile --minify --outfile ./dist/rwa",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

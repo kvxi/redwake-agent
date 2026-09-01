@@ -1,6 +1,6 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { SESSIONS_ROOT } from "../config.ts";
+import { appendFileSync, chmodSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { ensurePrivateDirectory, SESSIONS_ROOT } from "../paths.ts";
 import { isSessionEvent, type SessionEvent } from "./conversation-state.ts";
 
 /** Persisted envelope. Parent links retain a path toward future branching. */
@@ -31,6 +31,7 @@ export class SessionStore {
 
   constructor(readonly path: string, options: SessionStoreOptions = {}) {
     this.prepareEvent = options.prepareEvent ?? ((event) => event);
+    if (existsSync(path)) chmodSync(path, 0o600);
     const scan = this.scan(false);
     this.nextId = scan.maxId === null ? 0 : scan.maxId + 1;
     this.lastId = scan.leaf;
@@ -48,7 +49,9 @@ export class SessionStore {
     }
     const record: SessionRecord = { id: this.nextId, parent: this.lastId, event: prepared };
     try {
-      appendFileSync(this.path, `${JSON.stringify(record)}\n`);
+      ensurePrivateDirectory(dirname(this.path));
+      appendFileSync(this.path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+      chmodSync(this.path, 0o600);
       this.lastId = record.id;
       this.nextId += 1;
       return structuredClone(record);
@@ -117,7 +120,9 @@ export class SessionStore {
     if (id !== null && this.pathTo(id) === null) return false;
     this.lastId = id;
     try {
-      appendFileSync(this.path, `${JSON.stringify({ head: id })}\n`);
+      ensurePrivateDirectory(dirname(this.path));
+      appendFileSync(this.path, `${JSON.stringify({ head: id })}\n`, { mode: 0o600 });
+      chmodSync(this.path, 0o600);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       process.stderr.write(`session: failed to persist checkout: ${detail}\n`);
@@ -230,7 +235,8 @@ export function createSessionStore(
   options: SessionStoreOptions = {},
 ): SessionStore {
   const dir = sessionDirectory(cwd, root);
-  mkdirSync(dir, { recursive: true });
+  ensurePrivateDirectory(root);
+  ensurePrivateDirectory(dir);
   const files = listSessionFiles(cwd, root);
   const max = files.reduce((value, file) => Math.max(value, file.number), 0);
   return new SessionStore(join(dir, `session-${max + 1}.jsonl`), options);

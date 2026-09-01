@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  BUN_VERSION: "1.2.22"
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - run: bun install --frozen-lockfile
+      - run: bun test && bun run typecheck
+      - name: Build, sign, and package macOS targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          for arch in arm64 x64; do
+            target="darwin-$arch"
+            binary="release/rwa-$target"
+            bun build source/cli.ts --compile --minify --target="bun-$target" --outfile "$binary"
+            chmod 755 "$binary"
+            codesign --force --sign - "$binary"
+            codesign --verify "$binary"
+            file "$binary"
+            mkdir "release/stage-$target"
+            cp "$binary" "release/stage-$target/rwa"
+            chmod 755 "release/stage-$target/rwa"
+            tar -C "release/stage-$target" -czf "release/rwa-$target.tar.gz" rwa
+            test "$(tar -tzf "release/rwa-$target.tar.gz")" = "rwa"
+          done
+          case "$(uname -m)" in arm64) native=arm64;; x86_64) native=x64;; *) exit 1;; esac
+          test "$(release/rwa-darwin-$native --version)" = "rwa $(bun -p 'require("./package.json").version')"
+          release/rwa-darwin-$native --help >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-archives
+          path: release/*.tar.gz
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: "${{ env.BUN_VERSION }}" }
+      - run: bun install --frozen-lockfile
+      - run: bun test && bun run typecheck
+      - name: Build and package Linux targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          for target in linux-x64 linux-arm64 linux-x64-baseline; do
+            binary="release/rwa-$target"
+            bun build source/cli.ts --compile --minify --target="bun-$target" --outfile "$binary"
+            chmod 755 "$binary"
+            file "$binary"
+            mkdir "release/stage-$target"
+            cp "$binary" "release/stage-$target/rwa"
+            chmod 755 "release/stage-$target/rwa"
+            tar -C "release/stage-$target" -czf "release/rwa-$target.tar.gz" rwa
+            test "$(tar -tzf "release/rwa-$target.tar.gz")" = "rwa"
+          done
+          test "$(release/rwa-linux-x64 --version)" = "rwa $(bun -p 'require("./package.json").version')"
+          release/rwa-linux-x64 --help >/dev/null
+          env -u PATH XDG_CONFIG_HOME="$RUNNER_TEMP/rwa-state" release/rwa-linux-x64 --version >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-archives
+          path: release/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*-archives"
+          path: release
+          merge-multiple: true
+      - name: Validate assets and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s\n' rwa-darwin-arm64.tar.gz rwa-darwin-x64.tar.gz rwa-linux-arm64.tar.gz rwa-linux-x64-baseline.tar.gz rwa-linux-x64.tar.gz | sort)
+          actual=$(find release -maxdepth 1 -type f -name '*.tar.gz' -printf '%f\n' | sort)
+          test "$actual" = "$expected"
+          test "$(find release -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 5
+          package_version=$(node -p 'require("./package.json").version')
+          test "$package_version" = "${GITHUB_REF_NAME#v}"
+          (cd release && sha256sum *.tar.gz > SHA256SUMS && sha256sum --check SHA256SUMS)
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: "${{ github.token }}"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/*.tar.gz release/SHA256SUMS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/SHA256SUMS --generate-notes --verify-tag
+          fi

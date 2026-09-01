@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "redwake-coding-agent",
+      "name": "redwake-agent",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.32.1",
         "cheerio": "^1.0.0",
