@@ -4,11 +4,7 @@
 command is **`rwa`** (short for redwake-agent). The agent can execute shell commands;
 use it only in workspaces you trust.
 
-## Usage
-
-Release archives contain one standalone executable named `rwa`. Bun is not required
-at runtime. The public curl installer will be supplied separately and is not part of
-this repository's current distribution work.
+Redwake Agent is almost ready for public distribution.
 
 ```sh
 rwa                         # use the current directory as the workspace
@@ -27,13 +23,6 @@ Set provider configuration in the process environment:
 - `PROVIDER=openai-codex` for ChatGPT subscription OAuth (no API key)
 - `BRAVE_SEARCH_API_KEY` when using the search tool
 
-Standalone `rwa` does not depend on an install-root or workspace `.env` file.
-Relative read, write, edit, and bash operations resolve against the selected
-workspace. State is never stored in that workspace.
-
-Interactive terminals use a full-screen UI. Redirected input/output, `TERM=dumb`,
-`--no-tui`, and `--debug` use deterministic plain output. A blank message or Ctrl-D
-exits. `/model`, `/status`, `/tree`, and `/sessions` manage runtime state and history.
 ChatGPT OAuth is managed with:
 
 ```text
@@ -42,9 +31,6 @@ ChatGPT OAuth is managed with:
 /status openai-codex
 /logout openai-codex [account-id]
 ```
-
-The system prompt is built into the executable from
-`source/agent/system-prompt.ts`; no source-checkout prompt asset is needed.
 
 ## Private global state
 
