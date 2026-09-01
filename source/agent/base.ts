@@ -7,6 +7,8 @@ import type { AgentProgressEvent, AgentProgressHandler } from "./progress.ts";
 
 export interface AgentBaseOptions {
   ctx?: ToolContext;
+  /** Resolved invocation workspace used by tools and prompt identity. */
+  workspaceRoot?: string;
   print?: (text: string) => void;
   progress?: AgentProgressHandler;
   /** Shared canonical history. A private state is created for compatibility. */
@@ -28,12 +30,14 @@ export interface NormalizedToolCall {
 export abstract class AgentBase<Response, ToolResult> implements Conversation {
   protected readonly ctx: ToolContext;
   protected readonly conversation: ConversationState;
+  protected readonly workspaceRoot: string;
   private readonly print: (text: string) => void;
   private readonly progress?: AgentProgressHandler;
   private requestStreamedText = false;
 
   protected constructor(options: AgentBaseOptions = {}) {
-    this.ctx = options.ctx ?? createToolContext();
+    this.ctx = options.ctx ?? createToolContext({ workspaceRoot: options.workspaceRoot });
+    this.workspaceRoot = options.workspaceRoot ?? process.cwd();
     this.print = options.print ?? ((text) => console.log(text));
     this.progress = options.progress;
     this.conversation = options.conversation ?? new ConversationState(options.store);

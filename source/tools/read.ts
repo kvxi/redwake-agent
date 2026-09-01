@@ -33,7 +33,7 @@ export const readTool = defineTool({
   description: "Read a UTF-8 text file with 1-based line numbers.",
   schema,
   handler: async ({ file_path, view_range }, ctx) => {
-    const path = resolve(file_path);
+    const path = resolve(ctx.workspaceRoot, file_path);
 
     const stats = await stat(path).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return null;

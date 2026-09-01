@@ -1,6 +1,7 @@
 // Parses args, resolves the working directory, and runs the interactive agent.
 import { chdir, stdin, stdout } from "node:process";
 import { resolve } from "node:path";
+import { ensureStateDirectories, migrateLegacyState } from "./paths.ts";
 import { modelFor, parseProvider, PROVIDER, PROVIDERS, type Provider } from "./config.ts";
 import { createAgentFactory, type ProviderAgentFactory } from "./agent/factory.ts";
 import { CodexAuthService, type AuthService } from "./auth/service.ts";
@@ -292,11 +293,12 @@ export function parseArguments(argv: readonly string[]): CliArguments {
     const arg = argv[index]!;
     if (arg === "--resume") {
       const path = argv[++index];
-      if (!path) throw new Error("--resume requires a session JSONL path");
+      if (!path || path.startsWith("-")) throw new Error("--resume requires a session JSONL path");
+      if (resumePath) throw new Error("--resume may only be specified once");
       resumePath = resolve(path);
     } else if (arg === "--no-tui") noTui = true;
     else if (arg === "--debug") debug = true;
-    else if (arg.startsWith("--")) throw new Error(`Unknown option: ${arg}`);
+    else if (arg.startsWith("-")) throw new Error(`Unknown option: ${arg}`);
     else if (!cwd) cwd = arg;
     else throw new Error(`Unexpected argument: ${arg}`);
   }
@@ -306,12 +308,15 @@ export function parseArguments(argv: readonly string[]): CliArguments {
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   const args = parseArguments(argv);
   if (args.cwd) chdir(args.cwd);
+  const workspaceRoot = resolve(process.cwd());
+  migrateLegacyState();
+  ensureStateDirectories();
 
-  const store = args.resumePath ? new SessionStore(args.resumePath) : createSessionStore();
+  const store = args.resumePath ? new SessionStore(args.resumePath) : createSessionStore(workspaceRoot);
   const initialRecords = args.resumePath ? store.loadPathRecords() : [];
   const initialEvents = initialRecords.map((record) => record.event);
   const conversation = new ConversationState(store, initialEvents, initialRecords.map((record) => record.id));
-  const sessions = new SessionNavigator(conversation, store);
+  const sessions = new SessionNavigator(conversation, store, workspaceRoot);
   const auth = new CodexAuthService();
   const savedSelection = auth.store.getModelSelection();
   const startupProvider = process.env.PROVIDER || process.env.MODEL
@@ -324,7 +329,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const identity: TuiIdentity = {
     provider: startupProvider,
     model: startupModel,
-    cwd: process.cwd(),
+    cwd: workspaceRoot,
     sessionName: active?.name ?? `session-${active?.number ?? "new"}`,
     sessionNumber: active?.number,
     eventCount: initialEvents.length,
@@ -333,15 +338,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const io: ReplIO = useTui ? new TuiApp({ identity }) : new PlainReplIO(stdin, stdout);
   if (args.debug) {
     stdout.write(`Session: ${store.path}${args.resumePath ? ` (resumed ${initialEvents.length} events)` : ""}\n`);
-    stdout.write(`Startup: ${startupProvider}/${startupModel} · cwd ${process.cwd()} · plain debug mode\n`);
+    stdout.write(`Startup: ${startupProvider}/${startupModel} · cwd ${workspaceRoot} · plain debug mode\n`);
   } else if (!useTui) {
-    stdout.write(`Redwake · ${startupModel} (${startupProvider}) · ${identity.sessionNumber ? `session ${identity.sessionNumber}` : identity.sessionName} · ${identity.eventCount ? `${identity.eventCount} events` : "new"}\n`);
+    stdout.write(`Redwake Agent · ${startupModel} (${startupProvider}) · ${identity.sessionNumber ? `session ${identity.sessionNumber}` : identity.sessionName} · ${identity.eventCount ? `${identity.eventCount} events` : "new"}\n`);
   }
 
   const renderer = useTui ? undefined : new ProgressRenderer({ write: (text) => stdout.write(text), isTTY: false });
   const tui = useTui ? io as TuiApp : undefined;
   const createAgent = createAgentFactory({
-    ctx: createToolContext(),
+    ctx: createToolContext({ workspaceRoot }),
+    workspaceRoot,
     conversation,
     credentials: auth.credentials,
     progress: (event) => tui ? tui.handleProgress(event) : renderer?.handle(event),

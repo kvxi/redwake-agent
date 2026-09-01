@@ -42,7 +42,7 @@ export class OpenAIAgent extends AgentBase<
       model: this.model,
       max_output_tokens: MAX_TOKENS,
       input: this.input,
-      instructions: system ?? buildSystemPrompt({ cwd: process.cwd() }),
+      instructions: system ?? buildSystemPrompt({ cwd: this.workspaceRoot }),
       tools: this.openAITools,
     };
   }

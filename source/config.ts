@@ -1,5 +1,4 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
+export { AUTH_DB_PATH, SESSIONS_ROOT } from "./paths.ts";
 
 export const PROVIDERS = ["anthropic", "openai", "openai-codex"] as const;
 export type Provider = typeof PROVIDERS[number];
@@ -34,11 +33,6 @@ export function modelFor(provider: Provider): string {
 /** Model selected for the provider active at process startup. */
 export const MODEL = modelFor(PROVIDER);
 export const MAX_TOKENS = 4096;
-
-// Session-store root: ~/redwake/agent/sessions (per memory_sessions_plan.md).
-export const SESSIONS_ROOT = join(homedir(), "redwake", "agent", "sessions");
-/** Global, user-only credential database (never project-local). */
-export const AUTH_DB_PATH = join(homedir(), "redwake", "agent", "auth.sqlite");
 
 // Tool output/HTTP limits (ported from ToolSet class attributes).
 export const MAX_OUTPUT_CHARS = 20_000;

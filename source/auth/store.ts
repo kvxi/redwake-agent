@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, statSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { AUTH_DB_PATH, parseProvider, type Provider } from "../config.ts";
+import { parseProvider, type Provider } from "../config.ts";
+import { AUTH_DB_PATH, ensurePrivateDirectory } from "../paths.ts";
 import type { OAuthCredential, QuotaState } from "./types.ts";
 
 const MIGRATION = `
@@ -39,10 +40,7 @@ export class AuthStore {
   constructor(path = AUTH_DB_PATH) {
     if (path !== ":memory:") {
       const directory = dirname(path);
-      mkdirSync(directory, { recursive: true, mode: 0o700 });
-      const stat = statSync(directory);
-      if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("Refusing auth directory owned by another user");
-      if ((stat.mode & 0o077) !== 0) chmodSync(directory, 0o700);
+      ensurePrivateDirectory(directory);
     }
     this.db = new Database(path, { create: true, strict: true });
     this.db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
@@ -52,7 +50,10 @@ export class AuthStore {
       this.db.query("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?)").run(now);
       this.db.query("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)").run(now);
     })();
-    if (path !== ":memory:") chmodSync(path, 0o600);
+    if (path !== ":memory:") {
+      chmodSync(path, 0o600);
+      for (const sidecar of [`${path}-wal`, `${path}-shm`]) if (existsSync(sidecar)) chmodSync(sidecar, 0o600);
+    }
   }
   close(): void { this.db.close(); }
 

@@ -24,7 +24,7 @@ export class CodexAgent extends AgentBase<CodexTurnResponse, CodexFunctionOutput
   }
 
   private responseRequest(system?: string): CodexRequest {
-    const instructions = system?.trim() ? system : buildSystemPrompt({ cwd: process.cwd() });
+    const instructions = system?.trim() ? system : buildSystemPrompt({ cwd: this.workspaceRoot });
     return {
       model: this.model,
       instructions,

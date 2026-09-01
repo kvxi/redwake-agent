@@ -25,7 +25,7 @@ export const editTool = defineTool({
       throw new ToolError("old_string must not be empty");
     }
 
-    const path = resolve(file_path);
+    const path = resolve(ctx.workspaceRoot, file_path);
     const content = await readFile(path, "utf-8");
     const matchCount = content.split(oldString).length - 1;
     if (matchCount === 0) {

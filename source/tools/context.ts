@@ -12,6 +12,8 @@ export type FetchFn = (
  * Replaces the instance state that lived on the Python `ToolSet` class.
  */
 export interface ToolContext {
+  /** Resolved invocation workspace for all relative tool paths and commands. */
+  workspaceRoot: string;
   /** Absolute paths that have been read (or written) this session. */
   readPaths: Set<string>;
   /** Injectable fetch implementation, for testability. Defaults to global fetch. */
@@ -24,6 +26,7 @@ export function createToolContext(
   overrides: Partial<ToolContext> = {},
 ): ToolContext {
   return {
+    workspaceRoot: overrides.workspaceRoot ?? process.cwd(),
     readPaths: overrides.readPaths ?? new Set<string>(),
     fetch: overrides.fetch ?? globalThis.fetch,
     env: overrides.env ?? ((key) => process.env[key]),

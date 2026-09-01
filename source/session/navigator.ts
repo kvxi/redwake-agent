@@ -1,5 +1,5 @@
 import { basename, resolve } from "node:path";
-import { SESSIONS_ROOT } from "../config.ts";
+import { SESSIONS_ROOT } from "../paths.ts";
 import type { SessionEvent } from "./conversation-state.ts";
 import { ConversationState } from "./conversation-state.ts";
 import { listSessionFiles, SessionStore, type SessionRecord } from "./store.ts";
