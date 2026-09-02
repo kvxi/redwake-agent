@@ -32,4 +32,15 @@ describe("createAgentFactory", () => {
       modelFor("openai"),
     ]);
   });
+
+  test("injects a stored API key only into its matching provider", () => {
+    const received: ProviderAgentOptions[] = [];
+    const factory = createAgentFactory({ apiKeyFor: (provider) => provider === "openai" ? "stored-key" : undefined }, (_provider, options) => {
+      received.push(options);
+      return { runTurn: async () => {} };
+    });
+    factory("anthropic");
+    factory("openai");
+    expect(received.map((options) => options.apiKey)).toEqual([undefined, "stored-key"]);
+  });
 });

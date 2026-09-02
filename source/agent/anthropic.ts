@@ -17,6 +17,7 @@ import { toAnthropicHistory } from "./history.ts";
 export interface AnthropicAgentOptions extends AgentBaseOptions {
   client?: Anthropic;
   model?: string;
+  apiKey?: string;
 }
 
 export function textFromMessage(message: Message): string {
@@ -34,7 +35,7 @@ export class AnthropicAgent extends AgentBase<Message, ToolResultBlockParam> {
 
   constructor(options: AnthropicAgentOptions = {}) {
     super(options);
-    this.client = options.client ?? new Anthropic();
+    this.client = options.client ?? new Anthropic({ apiKey: options.apiKey });
     this.model = options.model ?? MODEL;
     // Roughly 150k tokens, leaving room for system, tools, and output.
     this.messages = toAnthropicHistory(this.conversation.snapshot(600_000));

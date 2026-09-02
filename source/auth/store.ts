@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS model_cache (
 );
 CREATE TABLE IF NOT EXISTS model_selection (
  singleton INTEGER PRIMARY KEY CHECK(singleton = 1), provider TEXT NOT NULL, model TEXT NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS api_credentials (
+ provider TEXT PRIMARY KEY CHECK(provider IN ('anthropic','openai')), api_key TEXT NOT NULL, updated_at INTEGER NOT NULL
 );`;
 
 type CredentialRow = { provider: "openai-codex"; account_id: string; email: string | null; plan_type: string | null; residency: string | null; access_token: string; refresh_token: string | null; id_token: string | null; expires_at: number; created_at: number; updated_at: number; last_used_at: number | null; disabled_at: number | null; last_auth_error: string | null };
@@ -82,6 +85,19 @@ export class AuthStore {
   putQuota(q: QuotaState): void { this.db.query(`INSERT INTO quota_state(provider,account_id,primary_used_percent,primary_reset_at,secondary_used_percent,secondary_reset_at,blocked_until,last_http_status,observed_at) VALUES($provider,$accountId,$primaryUsedPercent,$primaryResetAt,$secondaryUsedPercent,$secondaryResetAt,$blockedUntil,$lastHttpStatus,$observedAt) ON CONFLICT(provider,account_id) DO UPDATE SET primary_used_percent=excluded.primary_used_percent,primary_reset_at=excluded.primary_reset_at,secondary_used_percent=excluded.secondary_used_percent,secondary_reset_at=excluded.secondary_reset_at,blocked_until=excluded.blocked_until,last_http_status=excluded.last_http_status,observed_at=excluded.observed_at`).run({ ...q, primaryUsedPercent: q.primaryUsedPercent ?? null, primaryResetAt: q.primaryResetAt ?? null, secondaryUsedPercent: q.secondaryUsedPercent ?? null, secondaryResetAt: q.secondaryResetAt ?? null, blockedUntil: q.blockedUntil ?? null, lastHttpStatus: q.lastHttpStatus ?? null }); }
   getModelCache(accountId: string): { etag?: string; payload: unknown; fetchedAt: number } | undefined { const r = this.db.query("SELECT etag,payload_json,fetched_at FROM model_cache WHERE provider='openai-codex' AND account_id=?").get(accountId) as {etag:string|null;payload_json:string;fetched_at:number}|null; return r ? { etag:r.etag??undefined,payload:JSON.parse(r.payload_json),fetchedAt:r.fetched_at } : undefined; }
   putModelCache(accountId: string, payload: unknown, fetchedAt=Date.now(), etag?: string): void { this.db.query("INSERT INTO model_cache(provider,account_id,etag,payload_json,fetched_at) VALUES('openai-codex',?,?,?,?) ON CONFLICT(provider,account_id) DO UPDATE SET etag=excluded.etag,payload_json=excluded.payload_json,fetched_at=excluded.fetched_at").run(accountId,etag??null,JSON.stringify(payload),fetchedAt); }
+
+  getApiKey(provider: "anthropic" | "openai"): string | undefined {
+    const row = this.db.query("SELECT api_key FROM api_credentials WHERE provider=?").get(provider) as {api_key:string}|null;
+    return row?.api_key;
+  }
+  putApiKey(provider: "anthropic" | "openai", apiKey: string, updatedAt=Date.now()): void {
+    const value = apiKey.trim();
+    if (!value) throw new Error("API key cannot be empty");
+    this.db.query("INSERT INTO api_credentials(provider,api_key,updated_at) VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET api_key=excluded.api_key,updated_at=excluded.updated_at").run(provider,value,updatedAt);
+  }
+  removeApiKey(provider: "anthropic" | "openai"): boolean {
+    return this.db.query("DELETE FROM api_credentials WHERE provider=?").run(provider).changes > 0;
+  }
 
   /** The last provider/model chosen with /model, shared across workspaces. */
   getModelSelection(): { provider: Provider; model: string } | undefined {

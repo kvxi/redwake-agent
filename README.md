@@ -16,21 +16,33 @@ rwa --help
 rwa --version
 ```
 
-Set provider configuration in the process environment:
+In the full-screen TUI, use the terminal's mouse wheel or **Up**, **Down**,
+**Page Up**, and **Page Down** to scroll through output, including while a
+response is streaming. Press **End** to return to and follow the newest output.
+The full-screen terminal uses its own history viewport; use `--no-tui` if you
+prefer the terminal's native scrollback buffer.
 
-- `ANTHROPIC_API_KEY` for `PROVIDER=anthropic` (the default)
+On first run, the agent asks you to choose a provider and then authenticates it.
+Anthropic and OpenAI API keys are pasted into a masked prompt and stored in the
+private global database. ChatGPT subscriptions use browser OAuth.
+
+Credentials can also be managed later with:
+
+```text
+/login anthropic
+/login openai
+/login openai-codex
+/login openai-codex --device
+/status <provider>
+/logout <provider> [account-id]
+```
+
+Environment configuration remains supported and takes precedence over stored keys:
+
+- `ANTHROPIC_API_KEY` for `PROVIDER=anthropic`
 - `OPENAI_API_KEY` for `PROVIDER=openai`
 - `PROVIDER=openai-codex` for ChatGPT subscription OAuth (no API key)
 - `BRAVE_SEARCH_API_KEY` when using the search tool
-
-ChatGPT OAuth is managed with:
-
-```text
-/login openai-codex
-/login openai-codex --device
-/status openai-codex
-/logout openai-codex [account-id]
-```
 
 ## Private global state
 

@@ -26,6 +26,19 @@ describe("AuthStore", () => {
     store.close();
   });
 
+  test("stores API keys privately by provider", () => {
+    const store = new AuthStore(":memory:");
+    expect(store.getApiKey("anthropic")).toBeUndefined();
+    store.putApiKey("anthropic", " sk-ant-test ", 123);
+    store.putApiKey("openai", "sk-openai-test", 124);
+    expect(store.getApiKey("anthropic")).toBe("sk-ant-test");
+    expect(store.getApiKey("openai")).toBe("sk-openai-test");
+    expect(store.removeApiKey("anthropic")).toBe(true);
+    expect(store.getApiKey("anthropic")).toBeUndefined();
+    expect(store.getApiKey("openai")).toBe("sk-openai-test");
+    store.close();
+  });
+
   test("persists one global provider and model selection independently of credentials", () => {
     const store = new AuthStore(":memory:");
     expect(store.getModelSelection()).toBeUndefined();

@@ -1,8 +1,8 @@
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { SESSIONS_ROOT } from "../paths.ts";
 import type { SessionEvent } from "./conversation-state.ts";
 import { ConversationState } from "./conversation-state.ts";
-import { listSessionFiles, SessionStore, type SessionRecord } from "./store.ts";
+import { createSessionStore, listSessionFiles, sessionDirectory, SessionStore, type SessionRecord } from "./store.ts";
 
 export interface SessionSummary {
   path: string;
@@ -16,6 +16,13 @@ export interface SessionSummary {
 export interface SessionActivation {
   status: "switched" | "already-active";
   eventCount: number;
+}
+
+export interface SessionCreation {
+  path: string;
+  name: string;
+  number: number;
+  eventCount: 0;
 }
 
 function normalized(path: string): string {
@@ -75,6 +82,23 @@ export class SessionNavigator {
       });
     }
     return structuredClone(summaries);
+  }
+
+  create(): SessionCreation {
+    // createSessionStore establishes the private workspace directories. Include
+    // an unwritten active store when choosing the next number, since it is not
+    // visible to listSessionFiles yet.
+    const candidate = createSessionStore(this.cwd, this.root);
+    const activeMatch = /^session-(\d+)\.jsonl$/.exec(basename(this.activePath));
+    const activeNumber = activeMatch ? Number(activeMatch[1]) : 0;
+    const fileNumber = listSessionFiles(this.cwd, this.root)
+      .reduce((maximum, file) => Math.max(maximum, file.number), 0);
+    const number = Math.max(activeNumber, fileNumber) + 1;
+    const path = join(sessionDirectory(this.cwd, this.root), `session-${number}.jsonl`);
+    const store = normalized(candidate.path) === normalized(path) ? candidate : new SessionStore(path);
+    this.conversation.replaceSession(store, []);
+    this.activeStore = store;
+    return { path: normalized(path), name: basename(path), number, eventCount: 0 };
   }
 
   activate(path: string): SessionActivation {

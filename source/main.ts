@@ -9,7 +9,8 @@ import { ModelCatalog, type ModelDescriptor } from "./codex/models.ts";
 import { createToolContext } from "./tools/context.ts";
 import { createSessionStore, SessionStore } from "./session/store.ts";
 import { ConversationState, type ConversationEntry } from "./session/conversation-state.ts";
-import { SessionNavigator, type SessionSummary } from "./session/navigator.ts";
+import { SessionNavigator, type SessionCreation, type SessionSummary } from "./session/navigator.ts";
+import { NEW_SESSION, type SessionSelection } from "./session/sessions-ui.ts";
 import { ProgressRenderer } from "./ui/progress-renderer.ts";
 import { PlainReplIO } from "./ui/plain-repl-io.ts";
 import { TuiApp } from "./ui/tui-app.ts";
@@ -19,14 +20,19 @@ export interface InputRequest {
   kind: "message" | "choice";
   label: string;
   initialText?: string;
+  secret?: boolean;
 }
 
 export interface ReplIO {
   readLine(request: InputRequest): Promise<string | null>;
   append(message: { text: string; tone?: NoticeTone }): void;
   close(): void;
+  /** Handle Ctrl-C while no input prompt is active (for example, during OAuth). */
+  setInterruptHandler?(handler?: () => void): void;
+  /** Replace the displayed transcript after loading or branching a session. */
+  setConversation?(entries: readonly ConversationEntry[]): void;
   showTree?(entries: readonly ConversationEntry[]): Promise<number | null>;
-  showSessions?(sessions: readonly SessionSummary[]): Promise<string | null>;
+  showSessions?(sessions: readonly SessionSummary[]): Promise<SessionSelection | null>;
 }
 
 export interface BranchableConversation {
@@ -37,6 +43,7 @@ export interface BranchableConversation {
 export interface SessionNavigation {
   list(): SessionSummary[];
   activate(path: string): { status: "switched" | "already-active"; eventCount: number };
+  create?(): SessionCreation;
 }
 
 export interface ReplOptions {
@@ -49,6 +56,11 @@ export interface ReplOptions {
   conversation?: BranchableConversation;
   sessions?: SessionNavigation;
   auth?: AuthService;
+  getApiKey?: (provider: "anthropic" | "openai") => string | undefined;
+  saveApiKey?: (provider: "anthropic" | "openai", apiKey: string) => void;
+  removeApiKey?: (provider: "anthropic" | "openai") => boolean;
+  /** Run interactive provider and credential setup before the first prompt. */
+  onboarding?: boolean;
   discoverCodexModels?: () => Promise<ModelDescriptor[]>;
   onRuntimeChange?: (patch: Partial<TuiIdentity>) => void;
 }
@@ -65,23 +77,68 @@ export async function runRepl(
 ): Promise<void> {
   let provider = options.provider;
   let model = options.initialModel ?? options.modelFor(provider);
-  // Codex starts lazily so an unauthenticated user can run /login first.
-  let agent = provider === "openai-codex" ? undefined : options.createAgent({ provider, model });
+  // Agents start lazily so a fresh install can select a provider and authenticate first.
+  let agent: ReturnType<ProviderAgentFactory> | undefined = options.onboarding
+    ? undefined
+    : options.createAgent({ provider, model });
   let pendingEditorText = "";
   const rebuildAgent = () => { agent = options.createAgent({ provider, model }); };
   const ensureAgent = () => { if (!agent) rebuildAgent(); return agent!; };
 
-  const question = (label: string, initialText?: string, kind: InputRequest["kind"] = "choice"): Promise<string | null> =>
-    io.readLine({ kind, label: label.trimEnd(), ...(initialText ? { initialText } : {}) });
+  const question = (label: string, initialText?: string, kind: InputRequest["kind"] = "choice", secret = false): Promise<string | null> =>
+    io.readLine({ kind, label: label.trimEnd(), ...(initialText ? { initialText } : {}), ...(secret ? { secret: true } : {}) });
   const emit = (text: string, tone?: NoticeTone): void => {
     const clean = text.replace(/\n+$/, "");
     const inferred = tone ?? (/^(Could not|Invalid|Not authenticated|Unknown|Auth commands|Session .*not available)/i.test(clean) ? "error"
-      : /^(Switched|Logged in|Logged out|Continued|Branched)/i.test(clean) ? "success"
+      : /^(Switched|Logged in|Logged out|Continued|Branched|Started)/i.test(clean) ? "success"
       : /canceled|discarded/i.test(clean) ? "warning" : "info");
     io.append({ text: clean, tone: inferred });
   };
 
+  const loginProvider = async (selected: Provider, device = false): Promise<"success" | "canceled"> => {
+    if (selected === "openai-codex") {
+      if (!options.auth) throw new Error("ChatGPT authentication is unavailable.");
+      const controller = new AbortController();
+      let interrupted = false;
+      io.setInterruptHandler?.(() => { interrupted = true; controller.abort(); });
+      try {
+        const status = await options.auth.login(device, (message) => emit(`${message}\n`), controller.signal);
+        emit(`Logged in: ${status.identity}${status.planType ? ` (${status.planType})` : ""}.\n`);
+        agent = undefined;
+        return "success";
+      } catch (error) {
+        if (interrupted || controller.signal.aborted) return "canceled";
+        throw error;
+      } finally {
+        io.setInterruptHandler?.(undefined);
+      }
+    }
+    if (!options.saveApiKey) throw new Error(`API key storage is unavailable for ${selected}.`);
+    const apiKey = await question(`${selected === "anthropic" ? "Anthropic" : "OpenAI"} API key:`, undefined, "choice", true);
+    if (!apiKey?.trim()) return "canceled";
+    options.saveApiKey(selected, apiKey.trim());
+    agent = undefined;
+    emit(`Logged in to ${selected} with an API key.\n`);
+    return "success";
+  };
+
   try {
+    if (options.onboarding) {
+      emit("Welcome. First choose a model provider, then log in.\n");
+      const choice = await question(`Provider [${PROVIDERS.join("/")}]:`);
+      if (!choice) return;
+      const selected = parseProvider(choice);
+      if (!selected) { emit(`Invalid provider. Choose ${PROVIDERS.join(" or ")}.\n`); return; }
+      provider = selected;
+      model = options.modelFor(selected);
+      options.onRuntimeChange?.({ provider, model });
+      emit(`Selected ${provider} using ${model}.\n`);
+      const result = await loginProvider(provider);
+      if (result === "canceled") return;
+      // Mark onboarding complete only after credentials were successfully saved.
+      options.saveModelSelection?.(provider, model);
+    }
+
     while (true) {
       const prefill = pendingEditorText;
       pendingEditorText = "";
@@ -128,19 +185,19 @@ export async function runRepl(
           continue;
         }
         let selectedModel = options.modelFor(selected);
-        if (selected === "openai-codex") {
-          if (!options.auth) { emit("ChatGPT authentication is unavailable. Run /login openai-codex.\n"); continue; }
+        if (selected === "openai-codex" && options.auth) {
           const statuses = await options.auth.status();
-          if (!statuses.some((entry) => !entry.disabled)) { emit("Not authenticated. Run /login openai-codex.\n"); continue; }
-          try {
-            const models = await options.discoverCodexModels?.() ?? [];
-            if (models.length) {
-              const ids = models.map((entry) => entry.id);
-              const answer = await question(`Model [${ids.join("/")}] (default: ${ids[0]}): `);
-              if (answer?.trim() && !ids.includes(answer.trim())) { emit("Invalid Codex model.\n"); continue; }
-              selectedModel = answer?.trim() || ids[0]!;
-            }
-          } catch (error) { emit(`Could not discover Codex models: ${error instanceof Error ? error.message : String(error)}\n`); continue; }
+          if (statuses.some((entry) => !entry.disabled)) {
+            try {
+              const models = await options.discoverCodexModels?.() ?? [];
+              if (models.length) {
+                const ids = models.map((entry) => entry.id);
+                const answer = await question(`Model [${ids.join("/")}] (default: ${ids[0]}): `);
+                if (answer?.trim() && !ids.includes(answer.trim())) { emit("Invalid Codex model.\n"); continue; }
+                selectedModel = answer?.trim() || ids[0]!;
+              }
+            } catch (error) { emit(`Could not discover Codex models: ${error instanceof Error ? error.message : String(error)}\n`); continue; }
+          }
         }
         if (selected === provider && selectedModel === model) {
           options.saveModelSelection?.(provider, model);
@@ -149,7 +206,9 @@ export async function runRepl(
         }
         provider = selected;
         model = selectedModel;
-        rebuildAgent();
+        agent = selected === "openai-codex" || !options.getApiKey || options.getApiKey(selected)
+          ? options.createAgent({ provider, model })
+          : undefined;
         options.saveModelSelection?.(provider, model);
         options.onRuntimeChange?.({ provider, model });
         emit(`Switched to ${provider} using ${model}. Conversation retained.\n`);
@@ -159,20 +218,24 @@ export async function runRepl(
       if (userMessage.startsWith("/login ") || userMessage.startsWith("/logout ") || userMessage.startsWith("/status ")) {
         const parts = userMessage.trim().split(/\s+/);
         const command = parts[0];
-        if (parts[1] !== "openai-codex" || !options.auth) { emit("Auth commands support only openai-codex.\n"); continue; }
+        const selected = parts[1] ? parseProvider(parts[1]) : undefined;
+        if (!selected) { emit(`Auth commands require one of: ${PROVIDERS.join(", ")}.\n`); continue; }
         try {
           if (command === "/login") {
-            const status = await options.auth.login(parts.includes("--device"), (message) => emit(`${message}\n`));
-            emit(`Logged in: ${status.identity}${status.planType ? ` (${status.planType})` : ""}.\n`);
-            if (provider === "openai-codex") rebuildAgent();
+            const result = await loginProvider(selected, parts.includes("--device"));
+            if (result === "canceled" && selected === "openai-codex") return;
           } else if (command === "/logout") {
-            const removed = await options.auth.logout(parts[2]);
-            emit(removed ? "Logged out.\n" : "Account not found.\n");
-            if (provider === "openai-codex") agent = undefined;
-          } else {
-            const statuses = await options.auth.status();
+            const removed = selected === "openai-codex"
+              ? await options.auth?.logout(parts[2]) ?? false
+              : options.removeApiKey?.(selected) ?? false;
+            emit(removed ? "Logged out.\n" : "Credential not found.\n");
+            if (provider === selected) agent = undefined;
+          } else if (selected === "openai-codex") {
+            const statuses = await options.auth?.status() ?? [];
             if (!statuses.length) emit("No ChatGPT subscription accounts are logged in.\n");
             for (const status of statuses) emit(`${status.identity}: ${status.disabled ? "disabled" : "ready"}${status.planType ? `, ${status.planType}` : ""}\n`);
+          } else {
+            emit(options.getApiKey?.(selected) ? `${selected}: API key configured.\n` : `${selected}: not logged in.\n`);
           }
         } catch (error) { emit(`${error instanceof Error ? error.message : String(error)}\n`); }
         continue;
@@ -213,7 +276,9 @@ export async function runRepl(
         }
         if (selected.event.type === "user") pendingEditorText = selected.event.content;
         rebuildAgent();
-        options.onRuntimeChange?.({ eventCount: options.conversation.entries().length });
+        const branchedEntries = options.conversation.entries();
+        io.setConversation?.(branchedEntries);
+        options.onRuntimeChange?.({ eventCount: branchedEntries.length });
         emit(branchIndex === null
           ? "Branched to the start of the session.\n"
           : `Branched to session entry ${branchIndex + 1}.\n`);
@@ -232,20 +297,34 @@ export async function runRepl(
           emit(`Could not list sessions: ${error instanceof Error ? error.message : String(error)}\n`);
           continue;
         }
-        if (sessions.length === 0) {
-          emit("No sessions found for this workspace.\n");
-          continue;
-        }
-        let path: string | null;
+        let selection: SessionSelection | null;
         try {
-          path = await io.showSessions(sessions);
+          selection = await io.showSessions(sessions);
         } catch {
-          path = null;
+          selection = null;
         }
-        if (path === null) {
+        if (selection === null) {
           emit("Session selection canceled.\n");
           continue;
         }
+        if (selection === NEW_SESSION) {
+          if (!options.sessions.create) {
+            emit("New session creation is not available in this session.\n");
+            continue;
+          }
+          try {
+            const created = options.sessions.create();
+            pendingEditorText = "";
+            rebuildAgent();
+            if (options.conversation) io.setConversation?.(options.conversation.entries());
+            options.onRuntimeChange?.({ sessionName: created.name, sessionNumber: created.number, eventCount: 0 });
+            emit(`Started new session ${created.name}.\n`);
+          } catch (error) {
+            emit(`Could not create session: ${error instanceof Error ? error.message : String(error)}\n`);
+          }
+          continue;
+        }
+        const path = selection;
         try {
           const result = options.sessions.activate(path);
           if (result.status === "already-active") {
@@ -254,6 +333,7 @@ export async function runRepl(
           }
           pendingEditorText = "";
           rebuildAgent();
+          if (options.conversation) io.setConversation?.(options.conversation.entries());
           const summary = sessions.find((session) => session.path === path);
           const name = summary?.name ?? path;
           options.onRuntimeChange?.({ sessionName: name, sessionNumber: summary?.number, eventCount: result.eventCount });
@@ -269,6 +349,10 @@ export async function runRepl(
         continue;
       }
 
+      if (provider !== "openai-codex" && options.getApiKey && !options.getApiKey(provider)) {
+        emit(`Not authenticated. Run /login ${provider}.\n`);
+        continue;
+      }
       await ensureAgent().runTurn(userMessage);
       options.onRuntimeChange?.({ eventCount: options.conversation?.entries().length ?? 0 });
     }
@@ -336,6 +420,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   };
   const useTui = !args.noTui && !args.debug && stdin.isTTY === true && stdout.isTTY === true && process.env.TERM !== "dumb";
   const io: ReplIO = useTui ? new TuiApp({ identity }) : new PlainReplIO(stdin, stdout);
+  const tui = useTui ? io as TuiApp : undefined;
+  tui?.setConversation(conversation.entries());
   if (args.debug) {
     stdout.write(`Session: ${store.path}${args.resumePath ? ` (resumed ${initialEvents.length} events)` : ""}\n`);
     stdout.write(`Startup: ${startupProvider}/${startupModel} · cwd ${workspaceRoot} · plain debug mode\n`);
@@ -344,11 +430,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
 
   const renderer = useTui ? undefined : new ProgressRenderer({ write: (text) => stdout.write(text), isTTY: false });
-  const tui = useTui ? io as TuiApp : undefined;
+  const apiKeyFor = (provider: Provider): string | undefined => provider === "anthropic"
+    ? process.env.ANTHROPIC_API_KEY || auth.store.getApiKey("anthropic")
+    : provider === "openai" ? process.env.OPENAI_API_KEY || auth.store.getApiKey("openai") : undefined;
   const createAgent = createAgentFactory({
     ctx: createToolContext({ workspaceRoot }),
     workspaceRoot,
     conversation,
+    apiKeyFor,
     credentials: auth.credentials,
     progress: (event) => tui ? tui.handleProgress(event) : renderer?.handle(event),
   });
@@ -363,6 +452,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       conversation,
       sessions,
       auth,
+      getApiKey: apiKeyFor,
+      saveApiKey: (provider, apiKey) => auth.store.putApiKey(provider, apiKey),
+      removeApiKey: (provider) => auth.store.removeApiKey(provider),
+      onboarding: !savedSelection && !process.env.PROVIDER && !process.env.MODEL,
       discoverCodexModels: () => catalog.discover(true),
       onRuntimeChange: (patch) => tui?.updateRuntime(patch),
     }, io);

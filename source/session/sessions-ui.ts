@@ -3,6 +3,15 @@ import type { SessionSummary } from "./navigator.ts";
 import { selectListItem, type TreeRowOptions, type TreeSelectorIO } from "./tree-ui.ts";
 import { sanitizeSingleLine, truncateEnd } from "../ui/terminal-text.ts";
 
+/** A value that cannot be confused with a session path. */
+export const NEW_SESSION = Symbol("new-session");
+export type SessionSelection = string | typeof NEW_SESSION;
+export type SessionListItem = SessionSummary | { kind: "new-session" };
+
+export function sessionListItems(sessions: readonly SessionSummary[]): SessionListItem[] {
+  return [...sessions, { kind: "new-session" }];
+}
+
 function clean(text: string): string { return sanitizeSingleLine(text); }
 
 function safeStringify(value: unknown): string {
@@ -31,13 +40,19 @@ export function formatSessionRow(summary: SessionSummary, options: TreeRowOption
   return truncateEnd(`${marker}${body}`, Math.max(0, options.width ?? 80));
 }
 
+export function formatSessionListItem(item: SessionListItem, options: TreeRowOptions = {}): string {
+  if (!("kind" in item)) return formatSessionRow(item, options);
+  const marker = options.selected ? "❯ " : "  ";
+  return truncateEnd(`${marker}new session`, Math.max(0, options.width ?? 80));
+}
+
 export async function selectSession(
   sessions: readonly SessionSummary[],
   io: TreeSelectorIO = {},
-): Promise<string | null> {
-  return selectListItem(sessions, {
-    format: formatSessionRow,
-    value: (session) => session.path,
-    footer: "↑/↓ navigate · enter continue · esc cancel",
+): Promise<SessionSelection | null> {
+  return selectListItem(sessionListItems(sessions), {
+    format: formatSessionListItem,
+    value: (item): SessionSelection => "kind" in item ? NEW_SESSION : item.path,
+    footer: "↑/↓ navigate · enter select · esc cancel",
   }, io);
 }

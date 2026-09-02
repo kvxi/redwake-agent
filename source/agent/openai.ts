@@ -17,6 +17,7 @@ import { toOpenAIHistory } from "./history.ts";
 export interface OpenAIAgentOptions extends AgentBaseOptions {
   client?: OpenAI;
   model?: string;
+  apiKey?: string;
 }
 
 /** Runs an interactive conversation through the OpenAI Responses API. */
@@ -31,7 +32,7 @@ export class OpenAIAgent extends AgentBase<
 
   constructor(options: OpenAIAgentOptions = {}) {
     super(options);
-    this.client = options.client ?? new OpenAI();
+    this.client = options.client ?? new OpenAI({ apiKey: options.apiKey });
     this.model = options.model ?? MODEL;
     // Roughly 300k tokens, leaving room for system, tools, and output.
     this.input = toOpenAIHistory(this.conversation.snapshot(1_200_000));

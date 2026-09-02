@@ -131,6 +131,21 @@ describe("SessionNavigator", () => {
     expect(appended.event).toEqual({ type: "user", content: "continue" });
   });
 
+  test("starts a new empty session after an unwritten active session", () => {
+    const cwd = "/proj/new-session";
+    const current = createSessionStore(cwd, root);
+    const conversation = new ConversationState(current);
+    const navigator = new SessionNavigator(conversation, current, cwd, root);
+
+    const created = navigator.create();
+    expect(created).toMatchObject({ name: "session-2.jsonl", number: 2, eventCount: 0 });
+    expect(conversation.events).toEqual([]);
+    expect(navigator.list().find((item) => item.active)?.name).toBe("session-2.jsonl");
+
+    conversation.append({ type: "user", content: "fresh" });
+    expect(new SessionStore(created.path).loadPathRecords().map((record) => record.event)).toEqual([{ type: "user", content: "fresh" }]);
+  });
+
   test("honors checkout heads and rejects paths outside the workspace", () => {
     const cwd = "/proj/branches";
     const selected = createSessionStore(cwd, root);

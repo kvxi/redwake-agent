@@ -68,6 +68,14 @@ function transcriptLines(state: TuiState, theme: Theme): string[] {
   return lines;
 }
 
+/** The scroll range used by both rendering and the keyboard handler. */
+export function transcriptScrollRange(state: TuiState, theme: Theme): { viewportHeight: number; maxScroll: number } {
+  const rows = Math.max(3, state.rows);
+  const promptRows = rows >= 6 && state.columns >= 3 ? 3 : 1;
+  const viewportHeight = Math.max(1, rows - promptRows - 1);
+  return { viewportHeight, maxScroll: Math.max(0, transcriptLines(state, theme).length - viewportHeight) };
+}
+
 function renderOverlay(state: TuiState, height: number, theme: Theme): string[] | undefined {
   const overlay = state.overlay;
   if (!overlay) return undefined;
@@ -84,7 +92,9 @@ function renderOverlay(state: TuiState, height: number, theme: Theme): string[] 
 }
 
 function statusText(state: TuiState): string {
-  const pieces = [state.activity.label ?? state.activity.kind, state.identity.model];
+  const pieces = [state.activity.label ?? state.activity.kind];
+  if (!state.followOutput) pieces.push("history (End to follow)");
+  pieces.push(state.identity.model);
   const session = state.identity.sessionNumber ? `s${state.identity.sessionNumber}` : state.identity.sessionName;
   pieces.push(`${session}:${state.identity.eventCount}`);
   pieces.push(compactPath(state.identity.cwd, 30));
@@ -100,7 +110,10 @@ export function renderFrame(state: TuiState, theme: Theme): Frame {
   const viewportHeight = Math.max(1, rows - promptRows - 1);
   const all = transcriptLines(state, theme);
   const maxScroll = Math.max(0, all.length - viewportHeight);
-  const start = state.followOutput ? maxScroll : Math.max(0, maxScroll - Math.max(0, state.scrollOffset));
+  // scrollOffset is an absolute transcript line while output is not being
+  // followed. Keeping it absolute prevents streaming text from moving the
+  // viewport out from under a user who is reading older output.
+  const start = state.followOutput ? maxScroll : Math.min(maxScroll, Math.max(0, state.scrollOffset));
   let viewport = all.slice(start, start + viewportHeight);
   const overlay = renderOverlay(state, viewportHeight, theme);
   if (overlay) viewport = overlay;
@@ -111,9 +124,10 @@ export function renderFrame(state: TuiState, theme: Theme): Frame {
   const label = truncateEnd(state.input.label, Math.max(1, Math.floor(inputInner / 2)));
   const before = `${label} `;
   const available = Math.max(1, inputInner - displayWidth(before));
-  const prefix = state.input.value.slice(0, state.input.cursor);
+  const displayValue = state.input.secret ? "•".repeat(state.input.value.length) : state.input.value;
+  const prefix = displayValue.slice(0, state.input.cursor);
   const scrolled = displayWidth(prefix) > available;
-  const shown = scrolled ? truncateStart(prefix, available) : truncateEnd(state.input.value, available);
+  const shown = scrolled ? truncateStart(prefix, available) : truncateEnd(displayValue, available);
   const cursorDisplay = scrolled ? displayWidth(shown) : displayWidth(prefix);
   let prompt: string[];
   if (promptRows === 3) prompt = [

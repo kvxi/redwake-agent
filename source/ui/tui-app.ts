@@ -2,10 +2,10 @@ import type { AgentProgressEvent } from "../agent/progress.ts";
 import type { ConversationEntry } from "../session/conversation-state.ts";
 import type { SessionSummary } from "../session/navigator.ts";
 import { buildTreeRows, formatTreeDisplayRow, type TreeDisplayRow } from "../session/tree-ui.ts";
-import { formatSessionRow } from "../session/sessions-ui.ts";
+import { formatSessionListItem, NEW_SESSION, sessionListItems, type SessionSelection } from "../session/sessions-ui.ts";
 import type { InputRequest, ReplIO } from "../main.ts";
 import { editInput, type EditorAction } from "./input-editor.ts";
-import { renderFrame } from "./layout.ts";
+import { renderFrame, transcriptScrollRange } from "./layout.ts";
 import { reduceList, type ListKey, type ListState } from "./list-overlay.ts";
 import { TerminalScreen, type TerminalKey } from "./terminal-screen.ts";
 import { createTheme, type Theme } from "./theme.ts";
@@ -29,6 +29,7 @@ export class TuiApp implements ReplIO {
   private liveAssistant?: number;
   private renderQueued = false;
   private renderTimer?: ReturnType<typeof setTimeout>;
+  private interruptHandler?: () => void;
   private closed = false;
 
   constructor(options: TuiAppOptions) {
@@ -46,7 +47,7 @@ export class TuiApp implements ReplIO {
   readLine(request: InputRequest): Promise<string | null> {
     if (this.closed) return Promise.resolve(null);
     if (this.pending) throw new Error("A terminal input request is already active");
-    this.state = { ...this.state, input: { active: true, label: request.label, value: request.initialText ?? "", cursor: request.initialText?.length ?? 0 } };
+    this.state = { ...this.state, input: { active: true, label: request.label, value: request.initialText ?? "", cursor: request.initialText?.length ?? 0, secret: request.secret } };
     this.renderNow();
     return new Promise((resolve) => { this.pending = { request, resolve }; });
   }
@@ -55,6 +56,46 @@ export class TuiApp implements ReplIO {
     const text = message.text.replace(/\n+$/, "");
     if (!text) return;
     this.push({ id: this.nextId++, revision: 0, kind: "notice", text, tone: message.tone ?? "info" });
+  }
+
+  setConversation(entries: readonly ConversationEntry[]): void {
+    if (this.closed) return;
+    const transcript: TranscriptBlock[] = [{ id: this.nextId++, revision: 0, kind: "welcome" }];
+    const toolNames = new Map<string, string>();
+    for (const { event } of entries) {
+      switch (event.type) {
+        case "user":
+          transcript.push({ id: this.nextId++, revision: 0, kind: "user", text: event.content });
+          break;
+        case "assistant":
+          transcript.push({ id: this.nextId++, revision: 0, kind: "assistant", text: event.content });
+          break;
+        case "tool_call":
+          toolNames.set(event.id, event.name);
+          transcript.push({ id: this.nextId++, revision: 0, kind: "tool", text: summarizeToolCall(event.name, event.input) });
+          break;
+        case "tool_result": {
+          const name = summarizeToolName(toolNames.get(event.callId) ?? "tool");
+          transcript.push({
+            id: this.nextId++,
+            revision: 0,
+            kind: "tool",
+            text: `${name} (${event.isError ? "failed" : "completed"})`,
+            tone: event.isError ? "error" : "success",
+          });
+          break;
+        }
+      }
+    }
+    this.liveAssistant = undefined;
+    this.state = {
+      ...this.state,
+      transcript,
+      activity: { kind: "idle" },
+      followOutput: true,
+      scrollOffset: 0,
+    };
+    this.renderNow();
   }
 
   updateRuntime(patch: Partial<TuiIdentity>): void {
@@ -93,8 +134,16 @@ export class TuiApp implements ReplIO {
     }).then((row) => row?.kind === "event" ? row.entry.index : null);
   }
 
-  showSessions(sessions: readonly SessionSummary[]): Promise<string | null> {
-    return this.showList("Sessions", sessions, (session) => stripAnsi(formatSessionRow(session, { width: Math.max(1, this.state.columns - 4) })), "↑/↓ navigate · enter continue · esc cancel").then((item) => item?.path ?? null);
+  showSessions(sessions: readonly SessionSummary[]): Promise<SessionSelection | null> {
+    const items = sessionListItems(sessions);
+    // Keep the previous default (the final persisted session) so one Down key
+    // reveals and selects the appended new-session action.
+    return this.showList("Sessions", items, (item) => stripAnsi(formatSessionListItem(item, { width: Math.max(1, this.state.columns - 4) })), "↑/↓ navigate · enter select · esc cancel", undefined, Math.max(0, sessions.length - 1))
+      .then((item) => item && "kind" in item ? NEW_SESSION : item?.path ?? null);
+  }
+
+  setInterruptHandler(handler?: () => void): void {
+    this.interruptHandler = handler;
   }
 
   close(): void {
@@ -109,28 +158,44 @@ export class TuiApp implements ReplIO {
     this.screen.dispose();
   }
 
-  private showList<T>(title: string, items: readonly T[], rows: (item: T) => string, footer: string, activate?: PendingOverlay<T>["activate"]): Promise<T | null> {
+  private showList<T>(title: string, items: readonly T[], rows: (item: T) => string, footer: string, activate?: PendingOverlay<T>["activate"], initialSelected: number = items.length - 1): Promise<T | null> {
     if (!items.length) return Promise.resolve(null);
     if (this.overlay) throw new Error("An overlay is already active");
     const rowCount = Math.max(1, this.state.rows - 8);
-    const list: ListState<T> = { items, selected: items.length - 1, offset: Math.max(0, items.length - rowCount), rowCount };
+    const selected = Math.min(items.length - 1, Math.max(0, initialSelected));
+    const list: ListState<T> = { items, selected, offset: Math.max(0, selected - rowCount + 1), rowCount };
     this.state = { ...this.state, overlay: { title, rows: items.map(rows), selected: list.selected, offset: list.offset, footer } };
     this.renderNow();
     return new Promise((resolve) => { this.overlay = { state: list, rows, resolve, activate } as PendingOverlay<unknown>; });
   }
 
-  private handleKey(text: string, key: TerminalKey): void {
+  handleKey(text: string, key: TerminalKey): void {
     if (this.overlay) { this.handleOverlayKey(key); return; }
-    if (!this.pending) return;
-    if (key.name === "pageup" || key.name === "pagedown" || key.name === "end") {
-      if (key.name === "end") this.state = { ...this.state, followOutput: true, scrollOffset: 0 };
-      else {
-        const delta = Math.max(1, this.state.rows - 5);
-        const scrollOffset = Math.max(0, this.state.scrollOffset + (key.name === "pageup" ? delta : -delta));
-        this.state = { ...this.state, followOutput: scrollOffset === 0 && key.name === "pagedown", scrollOffset };
+    // Raw terminal mode prevents the OS from delivering SIGINT. Forward Ctrl-C
+    // to the active operation when there is no editor prompt to cancel.
+    if (!this.pending && key.ctrl && key.name === "c") {
+      this.interruptHandler?.();
+      return;
+    }
+    // The alternate screen has no native terminal scrollback: terminal wheel
+    // gestures are normally translated to Up/Down keys. Handle those as
+    // transcript navigation as well as Page Up/Down, including while the agent
+    // is running and no readLine request is pending.
+    const scrollDirection = key.name === "pageup" || key.name === "up" ? -1
+      : key.name === "pagedown" || key.name === "down" ? 1 : 0;
+    if (scrollDirection || key.name === "end") {
+      const { viewportHeight, maxScroll } = transcriptScrollRange(this.state, this.theme);
+      const current = this.state.followOutput ? maxScroll : Math.min(maxScroll, Math.max(0, this.state.scrollOffset));
+      if (key.name === "end") {
+        this.state = { ...this.state, followOutput: true, scrollOffset: maxScroll };
+      } else {
+        const delta = key.name === "pageup" || key.name === "pagedown" ? Math.max(1, viewportHeight - 1) : 1;
+        const scrollOffset = Math.min(maxScroll, Math.max(0, current + scrollDirection * delta));
+        this.state = { ...this.state, followOutput: scrollOffset === maxScroll, scrollOffset };
       }
       this.renderNow(); return;
     }
+    if (!this.pending) return;
     const action = this.editorAction(text, key);
     if (!action) return;
     const edited = editInput(this.state.input, action);

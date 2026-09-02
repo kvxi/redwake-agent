@@ -32,8 +32,9 @@ export interface TuiState {
   identity: TuiIdentity;
   activity: { kind: Activity; label?: string };
   transcript: readonly TranscriptBlock[];
-  input: { active: boolean; label: string; value: string; cursor: number };
+  input: { active: boolean; label: string; value: string; cursor: number; secret?: boolean };
   overlay?: ListOverlayState;
+  /** Absolute first visible transcript line when followOutput is false. */
   scrollOffset: number;
   followOutput: boolean;
   columns: number;
