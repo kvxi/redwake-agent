@@ -169,32 +169,39 @@ export class OpenAICodexOAuth {
   }
 
   async loginDevice(notify: (message: string) => void, signal?: AbortSignal): Promise<TokenSet> {
-    const pkce = await this.pkce();
+    // OpenAI's device-auth endpoints use their own protocol rather than the
+    // RFC 8628 field names. In particular, the server creates and returns the
+    // PKCE verifier only after the user approves the request.
     const response = await this.fetcher(CODEX_COMPATIBILITY.deviceCodeUrl, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ client_id: CODEX_COMPATIBILITY.clientId, code_challenge: pkce.challenge, code_challenge_method: "S256" }), signal,
+      body: JSON.stringify({ client_id: CODEX_COMPATIBILITY.clientId }), signal,
     });
     const data = await response.json() as Record<string, unknown>;
     if (!response.ok) throw new Error(`Device authorization failed (${response.status})`);
-    const deviceCode = String(data.device_code ?? "");
-    const userCode = String(data.user_code ?? "");
-    const verification = String(data.verification_uri_complete ?? data.verification_uri ?? "");
-    if (!deviceCode || !userCode || !verification) throw new Error("Malformed device authorization response");
+    const deviceAuthId = typeof data.device_auth_id === "string" ? data.device_auth_id : "";
+    const userCode = typeof data.user_code === "string" ? data.user_code : typeof data.usercode === "string" ? data.usercode : "";
+    if (!deviceAuthId || !userCode) throw new Error("Malformed device authorization response");
+    const verification = new URL("/codex/device", CODEX_COMPATIBILITY.authorizeUrl).toString();
     notify(`Open ${verification} and enter code ${userCode}`);
-    const interval = Math.max(2, Number(data.interval ?? 5) + 1) * 1000;
-    const deadline = this.now() + Math.min(Number(data.expires_in ?? 900) * 1000, 900_000);
+    const parsedInterval = Number(data.interval ?? 5);
+    const interval = (Number.isFinite(parsedInterval) && parsedInterval >= 0 ? parsedInterval : 5) * 1000;
+    const deadline = this.now() + 900_000;
     while (this.now() < deadline) {
-      await delay(interval, signal);
       const poll = await this.fetcher(CODEX_COMPATIBILITY.deviceTokenUrl, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ device_code: deviceCode, client_id: CODEX_COMPATIBILITY.clientId }), signal,
+        body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }), signal,
       });
-      const result = await poll.json() as Record<string, unknown>;
-      if (poll.ok && typeof result.authorization_code === "string") {
-        return this.exchange({ grant_type: "authorization_code", code: result.authorization_code, redirect_uri: CODEX_COMPATIBILITY.redirectUri, code_verifier: pkce.verifier, client_id: CODEX_COMPATIBILITY.clientId }, signal);
+      if (poll.ok) {
+        const result = await poll.json() as Record<string, unknown>;
+        const authorizationCode = typeof result.authorization_code === "string" ? result.authorization_code : "";
+        const verifier = typeof result.code_verifier === "string" ? result.code_verifier : "";
+        if (!authorizationCode || !verifier) throw new Error("Malformed device token response");
+        const redirectUri = new URL("/deviceauth/callback", CODEX_COMPATIBILITY.authorizeUrl).toString();
+        return this.exchange({ grant_type: "authorization_code", code: authorizationCode, redirect_uri: redirectUri, code_verifier: verifier, client_id: CODEX_COMPATIBILITY.clientId }, signal);
       }
-      const error = String(result.error ?? "");
-      if (error !== "authorization_pending" && error !== "slow_down") throw new Error(`Device authorization failed: ${error || poll.status}`);
+      // OpenAI reports an unapproved/unknown device request as 403 or 404.
+      if (poll.status !== 403 && poll.status !== 404) throw new Error(`Device authorization failed (${poll.status})`);
+      await delay(interval, signal);
     }
     throw new Error("Device authorization expired");
   }

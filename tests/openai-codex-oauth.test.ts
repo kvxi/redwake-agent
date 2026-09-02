@@ -38,6 +38,38 @@ describe("OpenAICodexOAuth", () => {
     expect(requests).toEqual([CODEX_COMPATIBILITY.deviceCodeUrl]);
   });
 
+  test("implements OpenAI's device-auth field contract", async () => {
+    const requests: Array<{ url: string; body: Record<string, string> }> = [];
+    const accessToken = `x.${Buffer.from(JSON.stringify({ chatgpt_account_id: "workspace", exp: 2_000_000_000 })).toString("base64url")}.x`;
+    const responses = [
+      { device_auth_id: "device-auth", usercode: "ABCD-EFGH", interval: "0" },
+      { authorization_code: "authorization-code", code_verifier: "server-verifier", code_challenge: "server-challenge" },
+      { access_token: accessToken, refresh_token: "refresh" },
+    ];
+    const notices: string[] = [];
+    const oauth = new OpenAICodexOAuth({
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        const rawBody = String(init?.body ?? "");
+        requests.push({
+          url: String(input),
+          body: init?.headers && new Headers(init.headers).get("content-type") === "application/json"
+            ? JSON.parse(rawBody) as Record<string, string>
+            : Object.fromEntries(new URLSearchParams(rawBody)),
+        });
+        return Response.json(responses.shift());
+      }) as typeof fetch,
+    });
+
+    const token = await oauth.loginDevice((message) => notices.push(message));
+    expect(token.accountId).toBe("workspace");
+    expect(notices).toEqual(["Open https://auth.openai.com/codex/device and enter code ABCD-EFGH"]);
+    expect(requests).toEqual([
+      { url: CODEX_COMPATIBILITY.deviceCodeUrl, body: { client_id: CODEX_COMPATIBILITY.clientId } },
+      { url: CODEX_COMPATIBILITY.deviceTokenUrl, body: { device_auth_id: "device-auth", user_code: "ABCD-EFGH" } },
+      { url: CODEX_COMPATIBILITY.tokenUrl, body: { grant_type: "authorization_code", code: "authorization-code", redirect_uri: "https://auth.openai.com/deviceauth/callback", code_verifier: "server-verifier", client_id: CODEX_COMPATIBILITY.clientId } },
+    ]);
+  });
+
   test("reports opener failure immediately instead of waiting for callback timeout", async () => {
     const oauth = new OpenAICodexOAuth({ isHeadless: () => false, openBrowser: async () => { throw new Error("not installed"); } });
     await expect(oauth.loginBrowser(() => {}, 30_000)).rejects.toThrow("Run /login openai-codex --device");
