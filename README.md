@@ -24,7 +24,9 @@ prefer the terminal's native scrollback buffer.
 
 On first run, the agent asks you to choose a provider and then authenticates it.
 Anthropic and OpenAI API keys are pasted into a masked prompt and stored in the
-private global database. ChatGPT subscriptions use browser OAuth.
+private global database. ChatGPT subscriptions use browser OAuth on a local
+desktop. In containers and headless sessions the agent automatically uses the
+device flow; it can also be requested explicitly with `--device`.
 
 Credentials can also be managed later with:
 

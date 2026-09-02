@@ -16,6 +16,7 @@ export class TerminalScreen {
   private readonly onKey?: TerminalScreenOptions["onKey"];
   private readonly onResize?: TerminalScreenOptions["onResize"];
   private previous: string[] = [];
+  private previousSoftWrapRows = new Set<number>();
   private started = false;
   private disposed = false;
   private wasRaw = false;
@@ -51,13 +52,18 @@ export class TerminalScreen {
     if (!this.started || this.disposed) return;
     let writes = "\x1b[?25l";
     const count = Math.max(this.previous.length, frame.lines.length);
+    const softWrapRows = new Set(frame.softWrapRows ?? []);
     for (let index = 0; index < count; index += 1) {
       const line = frame.lines[index] ?? "";
-      if (line !== this.previous[index]) writes += `\x1b[${index + 1};1H\x1b[2K${line}\x1b[0m`;
+      // The preceding over-width line paints this row through terminal soft
+      // wrapping. Writing or clearing it would split/erase a copied URL.
+      if (softWrapRows.has(index)) continue;
+      if (line !== this.previous[index] || this.previousSoftWrapRows.has(index)) writes += `\x1b[${index + 1};1H\x1b[2K${line}\x1b[0m`;
     }
     if (frame.cursor) writes += `\x1b[${frame.cursor.row};${frame.cursor.column}H\x1b[?25h`;
     this.output.write(writes);
     this.previous = [...frame.lines];
+    this.previousSoftWrapRows = softWrapRows;
   }
 
   dispose(): void {

@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { CODEX_COMPATIBILITY } from "../codex/constants.ts";
 import type { TokenSet } from "./types.ts";
 
@@ -8,6 +9,8 @@ export interface OAuthDependencies {
   now?: () => number;
   randomBytes?: (length: number) => Uint8Array;
   openBrowser?: (url: string) => void | Promise<void>;
+  /** Override desktop/container detection (primarily useful to embedders and tests). */
+  isHeadless?: () => boolean;
 }
 type Claims = Record<string, unknown>;
 const b64url = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url");
@@ -32,6 +35,13 @@ function claim(claims: Claims, ...names: string[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function defaultHeadless(): boolean {
+  if (process.platform !== "linux") return false;
+  // A callback to 127.0.0.1 inside a container cannot be reached by a browser
+  // on the host. Linux desktop openers also require a graphical session.
+  return existsSync("/.dockerenv") || Boolean(process.env.container) || (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY);
 }
 
 function defaultOpen(url: string): Promise<void> {
@@ -66,12 +76,15 @@ export class OpenAICodexOAuth {
   private readonly now: () => number;
   private readonly random: (n: number) => Uint8Array;
   private readonly open: (url: string) => void | Promise<void>;
+  private readonly headless: () => boolean;
 
   constructor(deps: OAuthDependencies = {}) {
     this.fetcher = deps.fetch ?? fetch;
     this.now = deps.now ?? Date.now;
     this.random = deps.randomBytes ?? ((n) => crypto.getRandomValues(new Uint8Array(n)));
     this.open = deps.openBrowser ?? defaultOpen;
+    // An injected opener is presumed usable unless detection is also injected.
+    this.headless = deps.isHeadless ?? (deps.openBrowser ? () => false : defaultHeadless);
   }
 
   async pkce(): Promise<{ verifier: string; challenge: string; state: string }> {
@@ -100,6 +113,10 @@ export class OpenAICodexOAuth {
 
   async loginBrowser(notify: (message: string) => void, timeoutMs = 120_000, signal?: AbortSignal): Promise<TokenSet> {
     if (signal?.aborted) throw canceled();
+    if (this.headless()) {
+      notify("No local browser/callback is available; using device login instead.");
+      return this.loginDevice(notify, signal);
+    }
     const pkce = await this.pkce();
     const url = this.authorizeUrl(pkce.challenge, pkce.state);
     const code = await new Promise<string>((resolve, reject) => {
@@ -133,7 +150,13 @@ export class OpenAICodexOAuth {
       // Listen before opening the browser so a fast redirect cannot race the callback server.
       server.listen(1455, "127.0.0.1", () => {
         notify(`Opening this URL to authenticate:\n${url}`);
-        Promise.resolve(this.open(url)).catch(() => notify(`Could not open a browser automatically. Open this URL manually:\n${url}`));
+        // Do not leave the user waiting for a callback after the opener has
+        // already told us that no browser can be launched.
+        try {
+          Promise.resolve(this.open(url)).catch(() => finish(new Error("Could not open a local browser. Run /login openai-codex --device.")));
+        } catch {
+          finish(new Error("Could not open a local browser. Run /login openai-codex --device."));
+        }
       });
     });
     return this.exchange({

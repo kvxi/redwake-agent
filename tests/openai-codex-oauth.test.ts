@@ -22,6 +22,27 @@ describe("OpenAICodexOAuth", () => {
     });
   });
 
+  test("uses device authorization immediately in a headless/container environment", async () => {
+    const requests: string[] = [];
+    const notices: string[] = [];
+    const oauth = new OpenAICodexOAuth({
+      isHeadless: () => true,
+      fetch: (async (input: string | URL | Request) => {
+        requests.push(String(input));
+        return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    });
+
+    await expect(oauth.loginBrowser((message) => notices.push(message))).rejects.toThrow("Malformed device authorization response");
+    expect(notices[0]).toContain("using device login instead");
+    expect(requests).toEqual([CODEX_COMPATIBILITY.deviceCodeUrl]);
+  });
+
+  test("reports opener failure immediately instead of waiting for callback timeout", async () => {
+    const oauth = new OpenAICodexOAuth({ isHeadless: () => false, openBrowser: async () => { throw new Error("not installed"); } });
+    await expect(oauth.loginBrowser(() => {}, 30_000)).rejects.toThrow("Run /login openai-codex --device");
+  });
+
   test("opens the browser after the callback server starts and can be aborted", async () => {
     const controller = new AbortController();
     let opened = "";

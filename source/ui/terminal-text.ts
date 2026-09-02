@@ -1,17 +1,45 @@
 import stringWidth from "string-width";
 
-export const ANSI_ESCAPE = /\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g;
+// Includes OSC (including OSC 8 hyperlinks), CSI, and short ESC sequences.
+// Keeping this centralized makes width/wrapping code treat trusted hyperlinks
+// as zero-width while also removing controls supplied by transcript text.
+export const ANSI_ESCAPE = /\x1B(?:\][^\x07\x1B]*(?:\x07|\x1B\\)|\[[0-?]*[ -/]*[@-~]|[@-_])/g;
 
 export function stripAnsi(text: string): string {
   return text.replace(ANSI_ESCAPE, "");
 }
 
-export function sanitizeSingleLine(text: string): string {
+/** Remove terminal controls while retaining intentional line boundaries. */
+export function sanitizeTerminalText(text: string): string {
   return stripAnsi(text)
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\t/g, " ")
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g, "");
+}
+
+export function sanitizeSingleLine(text: string): string {
+  return sanitizeTerminalText(text)
+    .replace(/[\n]+/g, " ")
     .replace(/ {2,}/g, " ")
     .trim();
+}
+
+const URL_TOKEN = /https?:\/\/[^\s<>"']+/g;
+
+/** Add OSC 8 only around URLs found in already-sanitized, trusted output. */
+export function linkifyUrls(text: string): string {
+  const clean = sanitizeTerminalText(text);
+  return clean.replace(URL_TOKEN, (token) => {
+    const suffix = token.match(/[.,;:!?]+$/)?.[0] ?? "";
+    const url = suffix ? token.slice(0, -suffix.length) : token;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return token;
+      // The complete URL is also the label, so terminals without OSC 8 support
+      // still show (and copies retain) exactly the usable plain URL.
+      return `\x1b]8;;${url}\x1b\\${url}\x1b]8;;\x1b\\${suffix}`;
+    } catch { return token; }
+  });
 }
 
 export function displayWidth(text: string): number {

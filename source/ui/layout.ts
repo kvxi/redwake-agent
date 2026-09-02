@@ -1,8 +1,12 @@
 import type { Theme } from "./theme.ts";
 import type { TranscriptBlock, TuiState } from "./tui-state.ts";
-import { compactPath, displayWidth, padDisplay, sanitizeSingleLine, truncateEnd, truncateStart, wrapText } from "./terminal-text.ts";
+import { compactPath, displayWidth, linkifyUrls, padDisplay, sanitizeSingleLine, sanitizeTerminalText, truncateEnd, truncateStart, wrapText } from "./terminal-text.ts";
 
-export interface Frame { lines: string[]; cursor?: { row: number; column: number } }
+export interface Frame { lines: string[]; cursor?: { row: number; column: number }; softWrapRows?: number[] }
+
+// Internal placeholder for physical rows occupied by a terminal-soft-wrapped
+// line. It is never written to the terminal.
+const SOFT_WRAP_ROW = "\u0000soft-wrap-row";
 
 const wrapCache = new WeakMap<object, Map<number, string[]>>();
 function wrapped(block: object, text: string, width: number): string[] {
@@ -54,9 +58,20 @@ function renderBlock(block: TranscriptBlock, state: TuiState, theme: Theme): str
     const mark = block.tone === "error" ? theme.error("✗") : block.tone === "success" ? theme.success("✓") : theme.secondary("●");
     return wrapText(`${mark} ${sanitizeSingleLine(block.text)}`, width);
   }
-  const icon = block.tone === "error" ? "✗" : block.tone === "success" ? "✓" : block.tone === "warning" ? "!" : "i";
   const color = block.tone === "error" ? theme.error : block.tone === "success" ? theme.success : theme.warning;
-  return wrapText(`${icon} ${sanitizeSingleLine(block.text)}`, Math.max(1, width - 4)).map((line) => color(`  ${line}`));
+  const lines: string[] = [];
+  for (const sourceLine of sanitizeTerminalText(block.text).split("\n")) {
+    // URLs are deliberately left as a single logical line. The terminal can
+    // soft-wrap them without inserting copy-breaking newline characters.
+    const hasUrl = /https?:\/\//.test(sourceLine);
+    const rendered = hasUrl ? [linkifyUrls(sourceLine)] : wrapText(sourceLine, Math.max(1, width));
+    lines.push(...rendered.map((line) => color(line)));
+    if (hasUrl) {
+      const continuationRows = Math.max(0, Math.ceil(displayWidth(sourceLine) / Math.max(1, width)) - 1);
+      for (let index = 0; index < continuationRows; index += 1) lines.push(SOFT_WRAP_ROW);
+    }
+  }
+  return lines;
 }
 
 function transcriptLines(state: TuiState, theme: Theme): string[] {
@@ -117,8 +132,19 @@ export function renderFrame(state: TuiState, theme: Theme): Frame {
   let viewport = all.slice(start, start + viewportHeight);
   const overlay = renderOverlay(state, viewportHeight, theme);
   if (overlay) viewport = overlay;
+  const softWrapRows: number[] = [];
+  let hasVisibleSoftWrapSource = false;
+  viewport = viewport.map((line, index) => {
+    if (line === SOFT_WRAP_ROW) {
+      if (hasVisibleSoftWrapSource) softWrapRows.push(index);
+      return "";
+    }
+    hasVisibleSoftWrapSource = displayWidth(line) > state.columns;
+    return line;
+  });
+  // Lines are cleared by TerminalScreen before being redrawn, so padding the
+  // transcript to terminal width is unnecessary and pollutes mouse selection.
   while (viewport.length < viewportHeight) viewport.push("");
-  viewport = viewport.map((line) => line + " ".repeat(Math.max(0, state.columns - displayWidth(line))));
 
   const inputInner = Math.max(1, state.columns - 2);
   const label = truncateEnd(state.input.label, Math.max(1, Math.floor(inputInner / 2)));
@@ -137,7 +163,7 @@ export function renderFrame(state: TuiState, theme: Theme): Frame {
   ];
   else prompt = [padDisplay(before + shown, state.columns)];
   const status = theme.secondary(padDisplay(` ${statusText(state)}`, state.columns));
-  const frame: Frame = { lines: [...viewport, ...prompt, status] };
+  const frame: Frame = { lines: [...viewport, ...prompt, status], ...(softWrapRows.length ? { softWrapRows } : {}) };
   if (state.input.active && !state.overlay) {
     frame.cursor = { row: viewportHeight + (promptRows === 3 ? 2 : 1), column: Math.min(state.columns, (promptRows === 3 ? 2 : 1) + displayWidth(before) + cursorDisplay) };
   }
