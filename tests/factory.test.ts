@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { modelFor, type Provider } from "../source/config.ts";
+import { DEFAULT_MODELS, modelFor, type Provider } from "../source/config.ts";
 import {
   createAgentFactory,
   type ProviderAgentOptions,
 } from "../source/agent/factory.ts";
 import { createToolContext } from "../source/tools/context.ts";
 import { ConversationState } from "../source/session/conversation-state.ts";
+
+test("OpenAI Codex defaults to GPT-5.6 Terra", () => {
+  expect(DEFAULT_MODELS["openai-codex"]).toBe("gpt-5.6-terra");
+});
 
 describe("createAgentFactory", () => {
   test("shares the tool context while resolving a model per provider", () => {

@@ -53,6 +53,20 @@ test("secret prompts mask pasted API keys", async () => {
   app.close();
 });
 
+test("Ctrl-A selects only the active user input and typing replaces it", async () => {
+  const screen = new FakeScreen();
+  const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });
+  const answer = app.readLine({ kind: "message", label: ">", initialText: "old prompt" });
+
+  app.handleKey("\u0001", { name: "a", ctrl: true });
+  expect(app.state.input.selection).toEqual({ start: 0, end: 10 });
+  app.handleKey("replacement", { sequence: "replacement" });
+  expect(app.state.input.value).toBe("replacement");
+  app.handleKey("", { name: "return" });
+  expect(await answer).toBe("replacement");
+  app.close();
+});
+
 test("Ctrl-C interrupts an operation when no input prompt is active", () => {
   const screen = new FakeScreen();
   const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });

@@ -95,7 +95,7 @@ export async function runRepl(
     io.append({ text: clean, tone: inferred });
   };
 
-  const loginProvider = async (selected: Provider, device = false): Promise<"success" | "canceled"> => {
+  const loginProvider = async (selected: Provider, device = false, onboardingLogin = false): Promise<"success" | "canceled"> => {
     if (selected === "openai-codex") {
       if (!options.auth) throw new Error("ChatGPT authentication is unavailable.");
       const controller = new AbortController();
@@ -103,7 +103,14 @@ export async function runRepl(
       io.setInterruptHandler?.(() => { interrupted = true; controller.abort(); });
       try {
         const status = await options.auth.login(device, (message) => emit(`${message}\n`), controller.signal);
+        const codexDefault = options.modelFor("openai-codex");
+        if (provider === "openai-codex") {
+          model = codexDefault;
+          options.onRuntimeChange?.({ provider, model });
+          if (!onboardingLogin) options.saveModelSelection?.(provider, model);
+        }
         emit(`Logged in: ${status.identity}${status.planType ? ` (${status.planType})` : ""}.\n`);
+        emit(`OpenAI Codex defaults to ${codexDefault}. Run /model openai-codex to choose another available model.\n`);
         agent = undefined;
         return "success";
       } catch (error) {
@@ -133,7 +140,7 @@ export async function runRepl(
       model = options.modelFor(selected);
       options.onRuntimeChange?.({ provider, model });
       emit(`Selected ${provider} using ${model}.\n`);
-      const result = await loginProvider(provider);
+      const result = await loginProvider(provider, false, true);
       if (result === "canceled") return;
       // Mark onboarding complete only after credentials were successfully saved.
       options.saveModelSelection?.(provider, model);
@@ -170,8 +177,9 @@ export async function runRepl(
         continue;
       }
 
-      if (userMessage === "/model") {
-        const choice = await question(
+      if (userMessage === "/model" || userMessage.startsWith("/model ")) {
+        const requestedProvider = userMessage.trim().split(/\s+/)[1];
+        const choice = requestedProvider ?? await question(
           `Provider [${PROVIDERS.join("/")}] (current: ${provider}): `,
         );
         if (!choice) {

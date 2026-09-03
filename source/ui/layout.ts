@@ -83,10 +83,99 @@ function transcriptLines(state: TuiState, theme: Theme): string[] {
   return lines;
 }
 
+interface InputRow { text: string; start: number; end: number }
+interface InputLayout {
+  boxed: boolean;
+  before: string;
+  rows: InputRow[];
+  visibleStart: number;
+  cursorRow: number;
+  cursorColumn: number;
+  promptRows: number;
+  inner: number;
+}
+
+const inputSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** Wrap editor text without dropping whitespace, so cursor/selection offsets stay exact. */
+function wrapInput(value: string, firstWidth: number, continuationWidth: number): InputRow[] {
+  const rows: InputRow[] = [];
+  let start = 0;
+  let text = "";
+  let used = 0;
+  let width = firstWidth;
+  for (const part of inputSegmenter.segment(value)) {
+    const index = part.index;
+    const segment = part.segment;
+    if (segment === "\n" || segment === "\r\n" || segment === "\r") {
+      rows.push({ text, start, end: index });
+      start = index + segment.length;
+      text = "";
+      used = 0;
+      width = continuationWidth;
+      continue;
+    }
+    const partWidth = displayWidth(segment);
+    if (text && used + partWidth > width) {
+      rows.push({ text, start, end: index });
+      start = index;
+      text = "";
+      used = 0;
+      width = continuationWidth;
+    }
+    // A double-width glyph cannot fit in a one-column terminal. Truncation is
+    // preferable to letting the input box paint into its border.
+    if (!text && partWidth > width) {
+      rows.push({ text: truncateEnd(segment, width), start, end: index + segment.length });
+      start = index + segment.length;
+      width = continuationWidth;
+      continue;
+    }
+    text += segment;
+    used += partWidth;
+  }
+  rows.push({ text, start, end: value.length });
+  return rows;
+}
+
+function inputLayout(state: TuiState): InputLayout {
+  const terminalRows = Math.max(3, state.rows);
+  const boxed = terminalRows >= 6 && state.columns >= 3;
+  const inner = boxed ? Math.max(1, state.columns - 2) : Math.max(1, state.columns);
+  const label = truncateEnd(state.input.label, Math.max(1, Math.floor(inner / 2)));
+  const before = `${label} `;
+  const firstWidth = Math.max(1, inner - displayWidth(before));
+  const displayValue = state.input.secret ? "•".repeat(state.input.value.length) : state.input.value;
+  const rows = wrapInput(displayValue, firstWidth, inner);
+  let cursorRow = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    if (rows[index]!.start <= state.input.cursor) cursorRow = index;
+  }
+  const cursor = Math.min(rows[cursorRow]!.end, Math.max(rows[cursorRow]!.start, state.input.cursor));
+  const cursorColumn = (cursorRow === 0 ? displayWidth(before) : 0)
+    + displayWidth(displayValue.slice(rows[cursorRow]!.start, cursor));
+
+  // Always retain a transcript row and the status line. Very large prompts
+  // become a cursor-following window, while ordinary wrapped prompts show in full.
+  const maxContentRows = boxed ? Math.max(1, terminalRows - 4) : 1;
+  const visibleCount = state.input.active ? Math.min(rows.length, maxContentRows) : 1;
+  const visibleStart = Math.max(0, Math.min(cursorRow, rows.length - visibleCount));
+  return {
+    boxed,
+    before,
+    rows: rows.slice(visibleStart, visibleStart + visibleCount),
+    visibleStart,
+    cursorRow,
+    cursorColumn,
+    promptRows: boxed ? visibleCount + 2 : 1,
+    inner,
+  };
+}
+
 /** The scroll range used by both rendering and the keyboard handler. */
 export function transcriptScrollRange(state: TuiState, theme: Theme): { viewportHeight: number; maxScroll: number } {
   const rows = Math.max(3, state.rows);
-  const promptRows = rows >= 6 && state.columns >= 3 ? 3 : 1;
+  const promptRows = inputLayout(state).promptRows;
   const viewportHeight = Math.max(1, rows - promptRows - 1);
   return { viewportHeight, maxScroll: Math.max(0, transcriptLines(state, theme).length - viewportHeight) };
 }
@@ -121,7 +210,8 @@ function statusText(state: TuiState): string {
 
 export function renderFrame(state: TuiState, theme: Theme): Frame {
   const rows = Math.max(3, state.rows);
-  const promptRows = rows >= 6 && state.columns >= 3 ? 3 : 1;
+  const editor = inputLayout(state);
+  const promptRows = editor.promptRows;
   const viewportHeight = Math.max(1, rows - promptRows - 1);
   const all = transcriptLines(state, theme);
   const maxScroll = Math.max(0, all.length - viewportHeight);
@@ -146,26 +236,32 @@ export function renderFrame(state: TuiState, theme: Theme): Frame {
   // transcript to terminal width is unnecessary and pollutes mouse selection.
   while (viewport.length < viewportHeight) viewport.push("");
 
-  const inputInner = Math.max(1, state.columns - 2);
-  const label = truncateEnd(state.input.label, Math.max(1, Math.floor(inputInner / 2)));
-  const before = `${label} `;
-  const available = Math.max(1, inputInner - displayWidth(before));
-  const displayValue = state.input.secret ? "•".repeat(state.input.value.length) : state.input.value;
-  const prefix = displayValue.slice(0, state.input.cursor);
-  const scrolled = displayWidth(prefix) > available;
-  const shown = scrolled ? truncateStart(prefix, available) : truncateEnd(displayValue, available);
-  const cursorDisplay = scrolled ? displayWidth(shown) : displayWidth(prefix);
+  const selection = state.input.selection;
+  const selectedRow = (row: InputRow): string => {
+    if (!selection || selection.start === selection.end || state.input.secret) return row.text;
+    const start = Math.max(row.start, Math.min(selection.start, selection.end));
+    const end = Math.min(row.end, Math.max(selection.start, selection.end));
+    if (start >= end) return row.text;
+    return row.text.slice(0, start - row.start)
+      + theme.selection(row.text.slice(start - row.start, end - row.start))
+      + row.text.slice(end - row.start);
+  };
+  const content = editor.rows.map((row, index) => padDisplay((editor.visibleStart + index === 0 ? editor.before : "") + selectedRow(row), editor.inner));
   let prompt: string[];
-  if (promptRows === 3) prompt = [
-    theme.border(`┌${"─".repeat(inputInner)}┐`),
-    `${theme.border("│")}${padDisplay(before + shown, inputInner)}${theme.border("│")}`,
-    theme.border(`└${"─".repeat(inputInner)}┘`),
+  if (editor.boxed) prompt = [
+    theme.border(`┌${"─".repeat(editor.inner)}┐`),
+    ...content.map((line) => `${theme.border("│")}${line}${theme.border("│")}`),
+    theme.border(`└${"─".repeat(editor.inner)}┘`),
   ];
-  else prompt = [padDisplay(before + shown, state.columns)];
+  else prompt = content;
   const status = theme.secondary(padDisplay(` ${statusText(state)}`, state.columns));
   const frame: Frame = { lines: [...viewport, ...prompt, status], ...(softWrapRows.length ? { softWrapRows } : {}) };
   if (state.input.active && !state.overlay) {
-    frame.cursor = { row: viewportHeight + (promptRows === 3 ? 2 : 1), column: Math.min(state.columns, (promptRows === 3 ? 2 : 1) + displayWidth(before) + cursorDisplay) };
+    const visibleCursorRow = editor.cursorRow - editor.visibleStart;
+    frame.cursor = {
+      row: viewportHeight + (editor.boxed ? 2 : 1) + visibleCursorRow,
+      column: Math.min(state.columns, (editor.boxed ? 2 : 1) + editor.cursorColumn),
+    };
   }
   return frame;
 }

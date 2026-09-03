@@ -15,6 +15,7 @@ test("terminal screen owns and idempotently restores terminal lifecycle", () => 
   const screen = new TerminalScreen({ input: input as never, output: output as never });
   screen.start();
   expect(input.isRaw).toBe(true);
+  expect(output.writes[0]).toContain("\x1b[>1u");
   screen.render({ lines: ["one"], cursor: { row: 1, column: 2 } });
   screen.render({ lines: ["one"], cursor: { row: 1, column: 2 } });
   expect(output.writes[1]).toContain("\x1b[2Kone");
@@ -22,4 +23,23 @@ test("terminal screen owns and idempotently restores terminal lifecycle", () => 
   screen.dispose(); screen.dispose();
   expect(input.isRaw).toBe(false);
   expect(output.writes.filter((text) => text.includes("?1049l"))).toHaveLength(1);
+  expect(output.writes.at(-1)).toContain("\x1b[<u");
+});
+
+test("terminal screen decodes progressive Ctrl-A keyboard reports", () => {
+  const { input, output } = fakeTerminal();
+  const keys: Array<{ text: string; name?: string; ctrl?: boolean }> = [];
+  const screen = new TerminalScreen({
+    input: input as never,
+    output: output as never,
+    onKey: (text, key) => keys.push({ text, name: key.name, ctrl: key.ctrl }),
+  });
+  screen.start();
+  input.emit("keypress", "", { sequence: "\x1b[97;5u" });
+  input.emit("keypress", "", { sequence: "\x1b[13u" });
+  expect(keys).toEqual([
+    { text: "a", name: "a", ctrl: true },
+    { text: "", name: "return", ctrl: false },
+  ]);
+  screen.dispose();
 });

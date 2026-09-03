@@ -20,7 +20,9 @@ In the full-screen TUI, use the terminal's mouse wheel or **Up**, **Down**,
 **Page Up**, and **Page Down** to scroll through output, including while a
 response is streaming. Press **End** to return to and follow the newest output.
 The full-screen terminal uses its own history viewport; use `--no-tui` if you
-prefer the terminal's native scrollback buffer.
+prefer the terminal's native scrollback buffer. The prompt box expands as input
+wraps, and **Ctrl-A** selects the current prompt so it can be replaced without
+selecting the terminal transcript.
 
 On first run, the agent asks you to choose a provider and then authenticates it.
 Anthropic and OpenAI API keys are pasted into a masked prompt and stored in the

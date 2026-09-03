@@ -64,18 +64,41 @@ describe("runRepl slash commands", () => {
     expect(writes).toContain("Logged in to openai with an API key.\n");
   });
 
-  test("onboards ChatGPT subscriptions through the OAuth login flow", async () => {
+  test("onboards ChatGPT subscriptions with the Codex default and model-selection prompt", async () => {
     const login = mock(async () => ({ accountId: "workspace", identity: "user@example.com", expiresAt: Date.now() + 1000 }));
-    const { io } = fakeIO(["openai-codex", ""]);
+    const saveModelSelection = mock((_provider: Provider, _model: string) => {});
+    const { io, writes } = fakeIO(["openai-codex", ""]);
     await runRepl({
       provider: "anthropic",
       createAgent: mock(() => ({ runTurn: async () => {} })),
-      modelFor: () => "codex-test",
+      modelFor: (provider) => provider === "openai-codex" ? "gpt-5.6-terra" : "claude-test",
       onboarding: true,
-      saveModelSelection: () => {},
+      saveModelSelection,
       auth: { login } as never,
     }, io);
     expect(login).toHaveBeenCalledTimes(1);
+    expect(saveModelSelection).toHaveBeenCalledWith("openai-codex", "gpt-5.6-terra");
+    expect(writes).toContain("OpenAI Codex defaults to gpt-5.6-terra. Run /model openai-codex to choose another available model.\n");
+  });
+
+  test("accepts the prompted /model openai-codex command", async () => {
+    const anthropic = { runTurn: mock(async (_message: string) => {}) };
+    const codex = { runTurn: mock(async (_message: string) => {}) };
+    const createAgent = mock((selection: Provider | { provider: Provider; model: string }) => {
+      const selected = typeof selection === "string" ? selection : selection.provider;
+      return selected === "openai-codex" ? codex : anthropic;
+    });
+    const { io, question } = fakeIO(["/model openai-codex", "gpt-5.6-terra", ""]);
+    await runRepl({
+      provider: "anthropic",
+      createAgent,
+      modelFor: (provider) => provider === "openai-codex" ? "gpt-5.6-terra" : "claude-test",
+      auth: { status: async () => [{ disabled: false }] } as never,
+      discoverCodexModels: async () => [{ provider: "openai-codex", id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" }],
+    }, io);
+
+    expect(question.mock.calls[1]?.[0].label).toContain("Model [gpt-5.6-terra]");
+    expect(createAgent).toHaveBeenLastCalledWith({ provider: "openai-codex", model: "gpt-5.6-terra" });
   });
 
   test("switches providers without sending the command to either model", async () => {

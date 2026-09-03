@@ -6,6 +6,7 @@ export interface Theme {
   warning(text: string): string;
   success(text: string): string;
   error(text: string): string;
+  selection(text: string): string;
   reset: string;
 }
 
@@ -20,6 +21,7 @@ export function createTheme(color = !process.env.NO_COLOR): Theme {
     warning: style(color, "33"),
     success: style(color, "32"),
     error: style(color, "31"),
+    selection: style(color, "7"),
     reset: color ? "\x1b[0m" : "",
   };
 }

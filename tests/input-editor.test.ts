@@ -13,3 +13,10 @@ test("Ctrl-D exits only on empty input", () => {
   expect(editInput({ value: "", cursor: 0 }, { type: "eof" }).outcome).toBe("eof");
   expect(editInput({ value: "x", cursor: 1 }, { type: "eof" }).outcome).toBeUndefined();
 });
+
+test("select all creates a replaceable user-input selection", () => {
+  const selected = editInput({ value: "whole prompt", cursor: 3 }, { type: "select-all" });
+  expect(selected).toEqual({ value: "whole prompt", cursor: 12, selection: { start: 0, end: 12 } });
+  expect(editInput(selected, { type: "insert", text: "new" })).toEqual({ value: "new", cursor: 3 });
+  expect(editInput(selected, { type: "backspace" })).toEqual({ value: "", cursor: 0 });
+});

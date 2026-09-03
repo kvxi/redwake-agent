@@ -24,6 +24,18 @@ test("notices preserve newlines, clickable complete URLs, and copy without visua
   expect(frame.lines.join("")).not.toContain("evil.test");
 });
 
+test("active input box expands to show wrapped prompt rows", () => {
+  const initial = createTuiState({ provider: "anthropic", model: "claude", cwd: "/tmp", sessionName: "new", eventCount: 0 }, 20, 10);
+  const state = { ...initial, input: { ...initial.input, active: true, value: "a".repeat(35), cursor: 35 } };
+  const frame = renderFrame(state, createTheme(false));
+  const visible = frame.lines.map(stripAnsi);
+
+  expect(frame.lines).toHaveLength(10);
+  expect(visible.filter((line) => line.startsWith("│")).length).toBe(3);
+  expect(frame.cursor?.row).toBe(8);
+  expect(visible.join("")).toContain("a".repeat(16));
+});
+
 for (const width of [30, 60, 89, 90, 120]) {
   test(`TUI frame remains bounded at ${width} columns`, () => {
     const state = createTuiState({ provider: "anthropic", model: "claude", cwd: "/a/very/long/界/workspace", sessionName: "session-46.jsonl", sessionNumber: 46, eventCount: 12 }, width, 20);

@@ -41,7 +41,11 @@ export class TerminalScreen {
       this.input.resume();
       this.input.on("keypress", this.handleKeypress);
       this.output.on("resize", this.handleResize);
-      this.output.write("\x1b[?1049h\x1b[?2004h\x1b[?25l\x1b[2J\x1b[H");
+      // Ask compatible terminals for unambiguous modified-key sequences. In
+      // particular, Ctrl-A is then delivered as CSI 97;5u instead of an
+      // ambiguous legacy control byte. Unsupported terminals
+      // safely ignore this progressive keyboard-protocol request.
+      this.output.write("\x1b[?1049h\x1b[>1u\x1b[?2004h\x1b[?25l\x1b[2J\x1b[H");
     } catch (error) {
       this.dispose();
       throw error;
@@ -73,11 +77,36 @@ export class TerminalScreen {
       this.input.off("keypress", this.handleKeypress);
       this.output.off("resize", this.handleResize);
       try { this.input.setRawMode?.(this.wasRaw); } catch { /* best-effort restoration */ }
-      try { this.output.write("\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1049l"); } catch { /* output may already be closed */ }
+      try { this.output.write("\x1b[0m\x1b[?25h\x1b[?2004l\x1b[<u\x1b[?1049l"); } catch { /* output may already be closed */ }
       if (!this.wasRaw) { try { this.input.pause(); } catch { /* input may already be closed */ } }
     }
   }
 
-  private handleKeypress = (text: string, key: TerminalKey): void => { this.onKey?.(text, key); };
+  private handleKeypress = (text: string, key: TerminalKey): void => {
+    // Node's readline parser does not currently decode the Kitty keyboard
+    // protocol used by several modern terminals, so normalize its CSI-u form.
+    const match = key.sequence?.match(/^\x1b\[(\d+)(?:;(\d+)(?::\d+)?)?u$/);
+    if (match) {
+      const codepoint = Number(match[1]);
+      const modifiers = Number(match[2] ?? 1) - 1;
+      if (Number.isSafeInteger(codepoint) && codepoint >= 0 && codepoint <= 0x10ffff) {
+        const character = String.fromCodePoint(codepoint);
+        const specialName = codepoint === 13 ? "return"
+          : codepoint === 27 ? "escape"
+          : codepoint === 9 ? "tab"
+          : codepoint === 127 ? "backspace"
+          : undefined;
+        this.onKey?.(specialName ? "" : character, {
+          ...key,
+          name: specialName ?? (/^[A-Za-z]$/.test(character) ? character.toLowerCase() : key.name),
+          shift: Boolean(modifiers & 1),
+          meta: Boolean(modifiers & 2),
+          ctrl: Boolean(modifiers & 4),
+        });
+        return;
+      }
+    }
+    this.onKey?.(text, key);
+  };
   private handleResize = (): void => { this.previous = []; this.onResize?.(this.columns, this.rows); };
 }

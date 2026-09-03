@@ -199,7 +199,7 @@ export class TuiApp implements ReplIO {
     const action = this.editorAction(text, key);
     if (!action) return;
     const edited = editInput(this.state.input, action);
-    this.state = { ...this.state, input: { ...this.state.input, value: edited.value, cursor: edited.cursor } };
+    this.state = { ...this.state, input: { ...this.state.input, value: edited.value, cursor: edited.cursor, selection: edited.selection } };
     if (edited.outcome) {
       const pending = this.pending;
       this.pending = undefined;
@@ -235,9 +235,10 @@ export class TuiApp implements ReplIO {
   }
 
   private editorAction(text: string, key: TerminalKey): EditorAction | undefined {
-    if (key.ctrl && key.name === "c") return { type: "cancel" };
-    if (key.ctrl && key.name === "d") return { type: "eof" };
-    if (key.ctrl && key.name === "a") return { type: "home" };
+    const sequence = key.sequence ?? text;
+    if ((key.ctrl && key.name === "c") || sequence === "\u0003") return { type: "cancel" };
+    if ((key.ctrl && key.name === "d") || sequence === "\u0004") return { type: "eof" };
+    if ((key.ctrl && key.name === "a") || sequence === "\u0001") return { type: "select-all" };
     if (key.ctrl && key.name === "e") return { type: "end" };
     if (key.ctrl && key.name === "u") return { type: "kill-start" };
     if (key.ctrl && key.name === "k") return { type: "kill-end" };

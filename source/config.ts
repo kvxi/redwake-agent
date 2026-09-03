@@ -10,8 +10,8 @@ export function parseProvider(value: string): Provider | undefined {
 export const DEFAULT_MODELS: Readonly<Record<Provider, string>> = {
   anthropic: "claude-opus-5",
   openai: "gpt-5.6",
-  // Conservative compatibility fallback; authenticated discovery takes priority.
-  "openai-codex": "gpt-5.1-codex",
+  // Authenticated discovery can be used to choose another available model.
+  "openai-codex": "gpt-5.6-terra",
 };
 
 const configuredProvider = process.env.PROVIDER ?? "anthropic";
