@@ -6,6 +6,7 @@ import { modelFor, parseProvider, PROVIDER, PROVIDERS, type Provider } from "./c
 import { createAgentFactory, type ProviderAgentFactory } from "./agent/factory.ts";
 import { CodexAuthService, type AuthService } from "./auth/service.ts";
 import { ModelCatalog, type ModelDescriptor } from "./codex/models.ts";
+import { discoverApiModels, type ApiProvider } from "./api-models.ts";
 import { createToolContext } from "./tools/context.ts";
 import { createSessionStore, SessionStore } from "./session/store.ts";
 import { ConversationState, type ConversationEntry } from "./session/conversation-state.ts";
@@ -62,6 +63,7 @@ export interface ReplOptions {
   /** Run interactive provider and credential setup before the first prompt. */
   onboarding?: boolean;
   discoverCodexModels?: () => Promise<ModelDescriptor[]>;
+  discoverApiModels?: (provider: ApiProvider) => Promise<ModelDescriptor[]>;
   onRuntimeChange?: (patch: Partial<TuiIdentity>) => void;
 }
 
@@ -177,10 +179,13 @@ export async function runRepl(
         continue;
       }
 
-      if (userMessage === "/model" || userMessage.startsWith("/model ")) {
+      if (userMessage === "/model" || userMessage.startsWith("/model ") ||
+          userMessage === "/api" || userMessage.startsWith("/api ")) {
+        const command = userMessage.trim().split(/\s+/)[0];
+        const availableProviders: readonly Provider[] = command === "/api" ? ["anthropic", "openai"] : PROVIDERS;
         const requestedProvider = userMessage.trim().split(/\s+/)[1];
         const choice = requestedProvider ?? await question(
-          `Provider [${PROVIDERS.join("/")}] (current: ${provider}): `,
+          `Provider [${availableProviders.join("/")}] (current: ${provider}): `,
         );
         if (!choice) {
           emit("Model selection canceled.\n");
@@ -188,8 +193,8 @@ export async function runRepl(
         }
 
         const selected = parseProvider(choice);
-        if (!selected) {
-          emit(`Invalid provider. Choose ${PROVIDERS.join(" or ")}.\n`);
+        if (!selected || !availableProviders.includes(selected)) {
+          emit(`Invalid provider. Choose ${availableProviders.join(" or ")}.\n`);
           continue;
         }
         let selectedModel = options.modelFor(selected);
@@ -205,6 +210,38 @@ export async function runRepl(
                 selectedModel = answer?.trim() || ids[0]!;
               }
             } catch (error) { emit(`Could not discover Codex models: ${error instanceof Error ? error.message : String(error)}\n`); continue; }
+          }
+        }
+        if (selected !== "openai-codex" && options.getApiKey && !options.getApiKey(selected)) {
+          try {
+            const result = await loginProvider(selected);
+            if (result === "canceled") {
+              emit("Model selection canceled.\n");
+              continue;
+            }
+          } catch (error) {
+            emit(`${error instanceof Error ? error.message : String(error)}\n`);
+            continue;
+          }
+        }
+        if (selected !== "openai-codex" && options.discoverApiModels) {
+          try {
+            const models = await options.discoverApiModels(selected);
+            if (!models.length) {
+              emit(`No models are available for the ${selected} API key.\n`);
+              continue;
+            }
+            const ids = models.map((entry) => entry.id);
+            const defaultModel = ids.includes(selectedModel) ? selectedModel : ids[0]!;
+            const answer = await question(`Model [${ids.join("/")}] (default: ${defaultModel}): `);
+            if (answer?.trim() && !ids.includes(answer.trim())) {
+              emit(`Invalid ${selected} API model.\n`);
+              continue;
+            }
+            selectedModel = answer?.trim() || defaultModel;
+          } catch (error) {
+            emit(`Could not discover ${selected} API models: ${error instanceof Error ? error.message : String(error)}\n`);
+            continue;
           }
         }
         if (selected === provider && selectedModel === model) {
@@ -353,7 +390,7 @@ export async function runRepl(
       }
 
       if (userMessage.startsWith("/")) {
-        emit(`Unknown command: ${userMessage}. Available commands: /model, /tree, /sessions, /login, /logout, /status\n`);
+        emit(`Unknown command: ${userMessage}. Available commands: /model, /api, /tree, /sessions, /login, /logout, /status\n`);
         continue;
       }
 
@@ -465,6 +502,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       removeApiKey: (provider) => auth.store.removeApiKey(provider),
       onboarding: !savedSelection && !process.env.PROVIDER && !process.env.MODEL,
       discoverCodexModels: () => catalog.discover(true),
+      discoverApiModels: (provider) => {
+        const apiKey = apiKeyFor(provider);
+        if (!apiKey) throw new Error(`No API key configured for ${provider}`);
+        return discoverApiModels(provider, apiKey);
+      },
       onRuntimeChange: (patch) => tui?.updateRuntime(patch),
     }, io);
   } finally {

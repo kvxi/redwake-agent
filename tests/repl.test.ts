@@ -120,6 +120,62 @@ describe("runRepl slash commands", () => {
     ]);
   });
 
+  test("prompts for a missing API key when switching providers", async () => {
+    const anthropic = { runTurn: mock(async (_message: string) => {}) };
+    const codex = { runTurn: mock(async (_message: string) => {}) };
+    const createAgent = mock((selection: Provider | { provider: Provider; model: string }) => {
+      const selected = typeof selection === "string" ? selection : selection.provider;
+      return selected === "anthropic" ? anthropic : codex;
+    });
+    const keys: Partial<Record<"anthropic" | "openai", string>> = {};
+    const { io, question, writes } = fakeIO(["/model anthropic", "sk-ant-test", "hello", ""]);
+
+    await runRepl({
+      provider: "openai-codex",
+      createAgent,
+      modelFor: (provider) => provider === "anthropic" ? "claude-test" : "codex-test",
+      getApiKey: (provider) => keys[provider],
+      saveApiKey: (provider, key) => { keys[provider] = key; },
+    }, io);
+
+    expect(question.mock.calls[1]?.[0]).toMatchObject({ label: "Anthropic API key:", secret: true });
+    expect(keys.anthropic).toBe("sk-ant-test");
+    expect(createAgent).toHaveBeenLastCalledWith({ provider: "anthropic", model: "claude-test" });
+    expect(anthropic.runTurn).toHaveBeenCalledWith("hello");
+    expect(writes).toContain("Logged in to anthropic with an API key.\n");
+    expect(writes).toContain("Switched to anthropic using claude-test. Conversation retained.\n");
+  });
+
+  test("/api logs in, discovers API models, and selects one", async () => {
+    const anthropic = { runTurn: mock(async (_message: string) => {}) };
+    const codex = { runTurn: mock(async (_message: string) => {}) };
+    const createAgent = mock((selection: Provider | { provider: Provider; model: string }) => {
+      const selected = typeof selection === "string" ? selection : selection.provider;
+      return selected === "anthropic" ? anthropic : codex;
+    });
+    const keys: Partial<Record<"anthropic" | "openai", string>> = {};
+    const discover = mock(async (_provider: "anthropic" | "openai") => [
+      { provider: "anthropic" as const, id: "claude-a", displayName: "Claude A" },
+      { provider: "anthropic" as const, id: "claude-b", displayName: "Claude B" },
+    ]);
+    const { io, question } = fakeIO(["/api anthropic", "sk-ant-test", "claude-b", "hello", ""]);
+
+    await runRepl({
+      provider: "openai-codex",
+      createAgent,
+      modelFor: (provider) => provider === "anthropic" ? "claude-a" : "codex-test",
+      getApiKey: (provider) => keys[provider],
+      saveApiKey: (provider, key) => { keys[provider] = key; },
+      discoverApiModels: discover,
+    }, io);
+
+    expect(question.mock.calls[1]?.[0]).toMatchObject({ label: "Anthropic API key:", secret: true });
+    expect(question.mock.calls[2]?.[0].label).toBe("Model [claude-a/claude-b] (default: claude-a):");
+    expect(discover).toHaveBeenCalledWith("anthropic");
+    expect(createAgent).toHaveBeenLastCalledWith({ provider: "anthropic", model: "claude-b" });
+    expect(anthropic.runTurn).toHaveBeenCalledWith("hello");
+  });
+
   test("shows the active model and session details without calling the model", async () => {
     const agent = { runTurn: mock(async (_message: string) => {}) };
     const { options } = fakeRuntime({ anthropic: agent });
@@ -235,7 +291,7 @@ describe("runRepl slash commands", () => {
 
     expect(agent.runTurn).not.toHaveBeenCalled();
     expect(writes).toEqual([
-      "Unknown command: /help. Available commands: /model, /tree, /sessions, /login, /logout, /status\n",
+      "Unknown command: /help. Available commands: /model, /api, /tree, /sessions, /login, /logout, /status\n",
     ]);
   });
 
