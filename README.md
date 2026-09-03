@@ -30,9 +30,14 @@ private global database. ChatGPT subscriptions use browser OAuth on a local
 desktop. In containers and headless sessions the agent automatically uses the
 device flow; it can also be requested explicitly with `--device`.
 
-Credentials can also be managed later with:
+Models and credentials can also be managed later with:
 
 ```text
+/model anthropic            # authenticate if needed, then choose an API model
+/model openai               # authenticate if needed, then choose an API model
+/model openai-codex         # choose a model available to the ChatGPT account
+/api anthropic              # API-provider-only alias for /model anthropic
+/api openai                 # API-provider-only alias for /model openai
 /login anthropic
 /login openai
 /login openai-codex

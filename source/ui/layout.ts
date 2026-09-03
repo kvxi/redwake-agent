@@ -45,7 +45,7 @@ export function renderWelcome(state: TuiState, theme: Theme): string[] {
     lines.push(` Workspace  ${workspace}`);
     lines.push(` Session    ${session}`);
   }
-  lines.push(" Commands   /model · /tree · /sessions · /status");
+  lines.push(" Commands   /model · /api · /tree · /sessions · /status");
   return box(lines, width, theme);
 }
 

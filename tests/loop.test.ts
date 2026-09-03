@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type Anthropic from "@anthropic-ai/sdk";
+import Anthropic from "@anthropic-ai/sdk";
 import type { Message, MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import { AnthropicAgent, textFromMessage } from "../source/agent/anthropic.ts";
 import { buildSystemPrompt } from "../source/agent/system-prompt.ts";
@@ -13,7 +13,9 @@ import { MAX_TOKENS, MODEL } from "../source/config.ts";
 
 const TOOL_NAMES = ["bash", "edit", "fetch", "read", "search", "write"];
 
-function fakeMessage(partial: Partial<Message>): Message {
+function fakeMessage(
+  partial: Omit<Partial<Message>, "content"> & { content?: unknown[] },
+): Message {
   return {
     id: "msg",
     type: "message",
@@ -67,11 +69,44 @@ describe("AnthropicAgent.createMessage", () => {
 
     expect(create).toHaveBeenCalledTimes(1);
     const arg = create.mock.calls[0]![0] as Anthropic.MessageCreateParams;
-    expect((arg.tools ?? []).map((tool) => tool.name).sort()).toEqual(TOOL_NAMES);
+    expect((arg.tools ?? []).flatMap((tool) => "name" in tool ? [tool.name] : []).sort()).toEqual(TOOL_NAMES);
     expect(typeof arg.system).toBe("string");
     expect((arg.system as string)).toContain(`Current working directory: ${process.cwd()}`);
     expect(arg.model).toBe(model);
     expect(arg.max_tokens).toBe(MAX_TOKENS);
+  });
+});
+
+describe("Anthropic streaming", () => {
+  test("assembles thinking and signature deltas into replayable content", async () => {
+    const wireEvents = [
+      ["message_start", { type: "message_start", message: fakeMessage({ stop_reason: null }) }],
+      ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }],
+      ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "actual thought" } }],
+      ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "signed" } }],
+      ["content_block_stop", { type: "content_block_stop", index: 0 }],
+      ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 3 } }],
+      ["message_stop", { type: "message_stop" }],
+    ] as const;
+    const body = wireEvents
+      .map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+      .join("");
+    const client = new Anthropic({
+      apiKey: "test",
+      fetch: mock(async () => new Response(body, { headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch,
+    });
+
+    const message = await client.messages.stream({
+      model: "claude-test",
+      max_tokens: 10,
+      messages: [{ role: "user", content: "hi" }],
+    }).finalMessage();
+
+    expect(message.content[0]).toMatchObject({
+      type: "thinking",
+      thinking: "actual thought",
+      signature: "signed",
+    });
   });
 });
 
