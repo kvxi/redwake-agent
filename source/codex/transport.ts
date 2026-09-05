@@ -56,6 +56,10 @@ export class CodexTransport {
         await this.delay(200 * 2 ** transientAttempts, signal);
         continue;
       }
+      if (signal?.aborted) {
+        if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
+        throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+      }
       if (response.status === 401 && !refreshed) {
         refreshed = true;
         callbacks.onStatus?.("Refreshing Codex authentication…");

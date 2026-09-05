@@ -67,6 +67,21 @@ test("Ctrl-A selects only the active user input and typing replaces it", async (
   app.close();
 });
 
+test("top-level prompts require two Ctrl-C presses to exit", async () => {
+  const screen = new FakeScreen();
+  const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });
+  const answer = app.readLine({ kind: "message", label: ">", initialText: "keep this draft" });
+
+  app.handleKey("\u0003", { name: "c", ctrl: true });
+  expect(app.state.input.active).toBe(true);
+  expect(app.state.input.value).toBe("keep this draft");
+  expect(screen.frames.at(-1)?.lines.join("\n")).toContain("Press Ctrl-C again to exit.");
+
+  app.handleKey("\u0003", { name: "c", ctrl: true });
+  expect(await answer).toBeNull();
+  app.close();
+});
+
 test("Ctrl-C interrupts an operation when no input prompt is active", () => {
   const screen = new FakeScreen();
   const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });

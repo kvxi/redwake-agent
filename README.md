@@ -1,8 +1,6 @@
 # redwake-agent
 
-**Redwake Agent** is a minimalist coding agent under the Redwake family of apps. Its
-command is **`rwa`** (short for redwake-agent). The agent can execute shell commands;
-use it only in workspaces you trust.
+**Redwake Agent** is a minimalist coding agent based on my sensibilities. I use this and will update it anytime I think a feature is necesssary in my workflow.
 
 Redwake Agent is almost ready for public distribution.
 
@@ -16,13 +14,8 @@ rwa --help
 rwa --version
 ```
 
-In the full-screen TUI, use the terminal's mouse wheel or **Up**, **Down**,
-**Page Up**, and **Page Down** to scroll through output, including while a
+In the TUI navigate up and down with arrow keys, including while a
 response is streaming. Press **End** to return to and follow the newest output.
-The full-screen terminal uses its own history viewport; use `--no-tui` if you
-prefer the terminal's native scrollback buffer. The prompt box expands as input
-wraps, and **Ctrl-A** selects the current prompt so it can be replaced without
-selecting the terminal transcript.
 
 On first run, the agent asks you to choose a provider and then authenticates it.
 Anthropic and OpenAI API keys are pasted into a masked prompt and stored in the

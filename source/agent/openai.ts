@@ -48,16 +48,16 @@ export class OpenAIAgent extends AgentBase<
     };
   }
 
-  createResponse(system?: string): Promise<Response> {
-    return this.client.responses.create(this.responseParams(system));
+  createResponse(system?: string, signal?: AbortSignal): Promise<Response> {
+    return this.client.responses.create(this.responseParams(system), { signal });
   }
 
   protected appendUser(userMessage: string): void {
     this.input.push({ role: "user", content: userMessage });
   }
 
-  protected async request(): Promise<Response> {
-    const result = await this.client.responses.create({ ...this.responseParams(), stream: true });
+  protected async request(signal?: AbortSignal): Promise<Response> {
+    const result = await this.client.responses.create({ ...this.responseParams(), stream: true }, { signal });
     // Compatibility for simple clients/fakes that return a complete response.
     if (!(Symbol.asyncIterator in (result as object))) return result as unknown as Response;
 

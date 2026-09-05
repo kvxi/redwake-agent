@@ -17,7 +17,7 @@ export interface TuiIdentity {
 export type TranscriptBlock =
   | { id: number; revision: number; kind: "welcome" }
   | { id: number; revision: number; kind: "user"; text: string }
-  | { id: number; revision: number; kind: "assistant"; text: string }
+  | { id: number; revision: number; kind: "assistant"; text: string; interrupted?: boolean }
   | { id: number; revision: number; kind: "tool"; text: string; tone?: NoticeTone }
   | { id: number; revision: number; kind: "notice"; text: string; tone: NoticeTone };
 

@@ -53,7 +53,14 @@ function renderBlock(block: TranscriptBlock, state: TuiState, theme: Theme): str
   const width = state.columns;
   if (block.kind === "welcome") return renderWelcome(state, theme);
   if (block.kind === "user") return wrapped(block, block.text, Math.max(1, width - 2)).map((line, i) => i === 0 ? `${theme.accent("›")} ${theme.primary(line)}` : `  ${theme.primary(line)}`);
-  if (block.kind === "assistant") return wrapped(block, block.text, width);
+  if (block.kind === "assistant") {
+    const lines = wrapped(block, block.text, width);
+    if (!block.interrupted) return lines;
+    const suffix = theme.secondary("[interrupted]");
+    const last = lines.at(-1) ?? "";
+    if (displayWidth(last) + 14 <= width) return [...lines.slice(0, -1), `${last} ${suffix}`];
+    return [...lines, suffix];
+  }
   if (block.kind === "tool") {
     const mark = block.tone === "error" ? theme.error("✗") : block.tone === "success" ? theme.success("✓") : theme.secondary("●");
     return wrapText(`${mark} ${sanitizeSingleLine(block.text)}`, width);

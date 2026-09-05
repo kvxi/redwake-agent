@@ -11,6 +11,7 @@ export type AgentProgressEvent =
       isError: boolean;
     }
   | { type: "status"; message: string }
+  | { type: "turn_interrupted" }
   | { type: "turn_end" };
 
 /** Progress handlers are synchronous presentation hooks. */

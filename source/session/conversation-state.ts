@@ -9,7 +9,8 @@ export type SessionEvent =
       callId: string;
       content: string;
       isError: boolean;
-    };
+    }
+  | { type: "turn_interrupted" };
 
 /** A provider-independent, context-budgeted view of a conversation. */
 export interface ConversationSnapshot {
@@ -35,6 +36,8 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
         typeof event.content === "string" &&
         typeof event.isError === "boolean"
       );
+    case "turn_interrupted":
+      return true;
     default:
       return false;
   }

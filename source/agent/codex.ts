@@ -38,16 +38,16 @@ export class CodexAgent extends AgentBase<CodexTurnResponse, CodexFunctionOutput
     };
   }
 
-  createResponse(system?: string): Promise<CodexTurnResponse> {
-    return this.options.transport.createResponse(this.responseRequest(system));
+  createResponse(system?: string, signal?: AbortSignal): Promise<CodexTurnResponse> {
+    return this.options.transport.createResponse(this.responseRequest(system), signal);
   }
 
   protected appendUser(message: string): void {
     this.input.push({ role: "user", content: message });
   }
 
-  protected request(): Promise<CodexTurnResponse> {
-    return this.options.transport.createResponse(this.responseRequest(), undefined, {
+  protected request(signal?: AbortSignal): Promise<CodexTurnResponse> {
+    return this.options.transport.createResponse(this.responseRequest(), signal, {
       onTextDelta: (delta) => this.emitTextDelta(delta),
       onStatus: (message) => this.emit({ type: "status", message }),
     });

@@ -30,6 +30,8 @@ export class TuiApp implements ReplIO {
   private renderQueued = false;
   private renderTimer?: ReturnType<typeof setTimeout>;
   private interruptHandler?: () => void;
+  private exitArmedAt?: number;
+  private static readonly EXIT_CONFIRM_MS = 1_500;
   private closed = false;
 
   constructor(options: TuiAppOptions) {
@@ -47,6 +49,7 @@ export class TuiApp implements ReplIO {
   readLine(request: InputRequest): Promise<string | null> {
     if (this.closed) return Promise.resolve(null);
     if (this.pending) throw new Error("A terminal input request is already active");
+    this.exitArmedAt = undefined;
     this.state = { ...this.state, input: { active: true, label: request.label, value: request.initialText ?? "", cursor: request.initialText?.length ?? 0, secret: request.secret } };
     this.renderNow();
     return new Promise((resolve) => { this.pending = { request, resolve }; });
@@ -73,6 +76,9 @@ export class TuiApp implements ReplIO {
         case "tool_call":
           toolNames.set(event.id, event.name);
           transcript.push({ id: this.nextId++, revision: 0, kind: "tool", text: summarizeToolCall(event.name, event.input) });
+          break;
+        case "turn_interrupted":
+          transcript.push({ id: this.nextId++, revision: 0, kind: "notice", text: "interrupted: turn stopped by user", tone: "warning" });
           break;
         case "tool_result": {
           const name = summarizeToolName(toolNames.get(event.callId) ?? "tool");
@@ -118,6 +124,15 @@ export class TuiApp implements ReplIO {
       case "tool_start": this.state = updateActivity(this.state, "running", `running ${summarizeToolName(event.name)}`); this.push({ id: this.nextId++, revision: 0, kind: "tool", text: summarizeToolCall(event.name, event.input) }, false); break;
       case "tool_finish": this.push({ id: this.nextId++, revision: 0, kind: "tool", text: `${summarizeToolName(event.name)} (${formatDuration(event.durationMs)})`, tone: event.isError ? "error" : "success" }, false); this.state = updateActivity(this.state, "thinking"); break;
       case "status": this.state = updateActivity(this.state, "thinking", event.message); break;
+      case "turn_interrupted":
+        if (this.liveAssistant !== undefined) {
+          this.updateBlock(this.liveAssistant, (block) => block.kind === "assistant"
+            ? { ...block, interrupted: true, revision: block.revision + 1 }
+            : block);
+        }
+        this.liveAssistant = undefined;
+        this.renderNow();
+        return;
       case "turn_end": this.liveAssistant = undefined; this.state = updateActivity(this.state, "idle"); this.renderNow(); return;
     }
     this.renderNow();
@@ -144,6 +159,7 @@ export class TuiApp implements ReplIO {
 
   setInterruptHandler(handler?: () => void): void {
     this.interruptHandler = handler;
+    if (handler) this.exitArmedAt = undefined;
   }
 
   close(): void {
@@ -159,6 +175,7 @@ export class TuiApp implements ReplIO {
   }
 
   private showList<T>(title: string, items: readonly T[], rows: (item: T) => string, footer: string, activate?: PendingOverlay<T>["activate"], initialSelected: number = items.length - 1): Promise<T | null> {
+    this.exitArmedAt = undefined;
     if (!items.length) return Promise.resolve(null);
     if (this.overlay) throw new Error("An overlay is already active");
     const rowCount = Math.max(1, this.state.rows - 8);
@@ -170,13 +187,30 @@ export class TuiApp implements ReplIO {
   }
 
   handleKey(text: string, key: TerminalKey): void {
-    if (this.overlay) { this.handleOverlayKey(key); return; }
-    // Raw terminal mode prevents the OS from delivering SIGINT. Forward Ctrl-C
-    // to the active operation when there is no editor prompt to cancel.
-    if (!this.pending && key.ctrl && key.name === "c") {
+    if (this.overlay) { this.exitArmedAt = undefined; this.handleOverlayKey(key); return; }
+    const ctrlC = (key.ctrl && key.name === "c") || (key.sequence ?? text) === "\u0003";
+    if (ctrlC) {
+      if (this.pending?.request.kind === "choice") {
+        this.finishInput(null);
+        return;
+      }
+      if (this.pending?.request.kind === "message") {
+        const now = Date.now();
+        if (this.exitArmedAt !== undefined && now - this.exitArmedAt <= TuiApp.EXIT_CONFIRM_MS) {
+          this.exitArmedAt = undefined;
+          this.finishInput(null);
+        } else {
+          this.exitArmedAt = now;
+          this.append({ text: "Press Ctrl-C again to exit.", tone: "warning" });
+        }
+        return;
+      }
+      // Raw mode prevents the OS from delivering SIGINT. Forward Ctrl-C to the
+      // active cancellable operation while no editor owns input.
       this.interruptHandler?.();
       return;
     }
+    if (this.exitArmedAt !== undefined) this.exitArmedAt = undefined;
     // The alternate screen has no native terminal scrollback: terminal wheel
     // gestures are normally translated to Up/Down keys. Handle those as
     // transcript navigation as well as Page Up/Down, including while the agent
@@ -225,6 +259,15 @@ export class TuiApp implements ReplIO {
     else this.overlay.state = next;
     this.state = { ...this.state, overlay: { ...this.state.overlay!, rows: next.items.map(this.overlay.rows), selected: next.selected, offset: next.offset } };
     this.renderNow();
+  }
+
+  private finishInput(value: string | null): void {
+    if (!this.pending) return;
+    const pending = this.pending;
+    this.pending = undefined;
+    this.state = { ...this.state, input: { ...this.state.input, active: false } };
+    this.renderNow();
+    pending.resolve(value);
   }
 
   private finishOverlay(value: unknown): void {
