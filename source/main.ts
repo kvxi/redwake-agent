@@ -28,7 +28,7 @@ export interface ReplIO {
   readLine(request: InputRequest): Promise<string | null>;
   append(message: { text: string; tone?: NoticeTone }): void;
   close(): void;
-  /** Handle Ctrl-C while no input prompt is active (for example, during OAuth). */
+  /** Handle Ctrl-C while an active cancellable operation owns the terminal. */
   setInterruptHandler?(handler?: () => void): void;
   /** Replace the displayed transcript after loading or branching a session. */
   setConversation?(entries: readonly ConversationEntry[]): void;
@@ -398,8 +398,27 @@ export async function runRepl(
         emit(`Not authenticated. Run /login ${provider}.\n`);
         continue;
       }
-      await ensureAgent().runTurn(userMessage);
-      options.onRuntimeChange?.({ eventCount: options.conversation?.entries().length ?? 0 });
+      const controller = new AbortController();
+      let interrupted = false;
+      const canInterrupt = typeof io.setInterruptHandler === "function";
+      io.setInterruptHandler?.(() => {
+        if (controller.signal.aborted) return;
+        interrupted = true;
+        controller.abort();
+      });
+      try {
+        if (canInterrupt) await ensureAgent().runTurn(userMessage, controller.signal);
+        else await ensureAgent().runTurn(userMessage);
+      } catch (error) {
+        if (!(interrupted && controller.signal.aborted)) throw error;
+        // Provider-local state may contain an incomplete streamed response or
+        // only some of a response's tool calls. Rebuild it from canonical state.
+        agent = undefined;
+        emit("Interrupted.\n", "warning");
+      } finally {
+        io.setInterruptHandler?.(undefined);
+        options.onRuntimeChange?.({ eventCount: options.conversation?.entries().length ?? 0 });
+      }
     }
   } finally {
     io.close();

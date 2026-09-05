@@ -44,7 +44,7 @@ export abstract class AgentBase<Response, ToolResult> implements Conversation {
   }
 
   protected abstract appendUser(userMessage: string): void;
-  protected abstract request(): Promise<Response>;
+  protected abstract request(signal?: AbortSignal): Promise<Response>;
   protected abstract remember(response: Response): void;
   protected abstract responseText(response: Response): string;
   protected abstract toolCalls(response: Response): Iterable<NormalizedToolCall>;
@@ -67,9 +67,16 @@ export abstract class AgentBase<Response, ToolResult> implements Conversation {
     this.emit({ type: "text_delta", delta });
   }
 
-  protected async executeToolCalls(calls: Iterable<NormalizedToolCall>): Promise<ToolResult[]> {
+  protected throwIfAborted(signal?: AbortSignal): void {
+    if (!signal?.aborted) return;
+    if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
+    throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+  }
+
+  protected async executeToolCalls(calls: Iterable<NormalizedToolCall>, signal?: AbortSignal): Promise<ToolResult[]> {
     const results: ToolResult[] = [];
     for (const original of calls) {
+      this.throwIfAborted(signal);
       let input = original.input;
       let inputError = original.inputError;
       if (!("input" in original) && original.decodeInput) {
@@ -106,18 +113,23 @@ export abstract class AgentBase<Response, ToolResult> implements Conversation {
       }
       this.conversation.append({ type: "tool_result", callId: call.id, content, isError });
       results.push(this.encodeToolResult(call, content, isError));
+      this.throwIfAborted(signal);
     }
     return results;
   }
 
-  async runTurn(userMessage: string): Promise<void> {
+  async runTurn(userMessage: string, signal?: AbortSignal): Promise<void> {
     this.conversation.append({ type: "user", content: userMessage });
     this.appendUser(userMessage);
+    let interruptionRecorded = false;
     try {
       while (true) {
+        this.throwIfAborted(signal);
         this.requestStreamedText = false;
         this.emit({ type: "request_start" });
-        const response = await this.request();
+        const response = await this.request(signal);
+        // Do not accept a response that lost a race with cancellation.
+        this.throwIfAborted(signal);
         this.remember(response);
         const text = this.responseText(response);
         if (text) {
@@ -130,10 +142,18 @@ export abstract class AgentBase<Response, ToolResult> implements Conversation {
           }
           this.conversation.append({ type: "assistant", content: text });
         }
-        const toolResults = await this.executeToolCalls([...this.toolCalls(response)]);
+        const toolResults = await this.executeToolCalls([...this.toolCalls(response)], signal);
+        this.throwIfAborted(signal);
         if (toolResults.length === 0) return;
         this.appendToolResults(toolResults);
       }
+    } catch (error) {
+      if (signal?.aborted && !interruptionRecorded) {
+        interruptionRecorded = true;
+        this.conversation.append({ type: "turn_interrupted" });
+        this.emit({ type: "turn_interrupted" });
+      }
+      throw error;
     } finally {
       this.emit({ type: "turn_end" });
     }

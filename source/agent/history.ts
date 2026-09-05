@@ -61,7 +61,9 @@ function flattened(snapshot: ConversationSnapshot): Array<{ role: "user" | "assi
   for (let i = 0; i < snapshot.recentEvents.length; i += 1) {
     const event = snapshot.recentEvents[i]!;
     if (event.type === "user" || event.type === "assistant") push(event.type, event.content);
-    else if (tools.has(i)) push("user", tools.get(i)!);
+    else if (event.type === "turn_interrupted") {
+      push("assistant", "[Assistant turn interrupted by the user before completion. Do not continue it unless the user's next message asks you to.]");
+    } else if (tools.has(i)) push("user", tools.get(i)!);
   }
   return output;
 }

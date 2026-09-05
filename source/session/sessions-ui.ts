@@ -28,6 +28,7 @@ function eventPreview(event: SessionEvent): string {
     case "assistant": return `assistant: ${event.content}`;
     case "tool_call": return `tool ${event.name}: ${safeStringify(event.input)}`;
     case "tool_result": return `result (${event.isError ? "error" : "ok"}): ${event.content}`;
+    case "turn_interrupted": return "interrupted: turn stopped by user";
   }
 }
 

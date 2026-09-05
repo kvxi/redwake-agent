@@ -51,18 +51,18 @@ export class AnthropicAgent extends AgentBase<Message, ToolResultBlockParam> {
     };
   }
 
-  createMessage(system?: string): Promise<Message> {
-    return this.client.messages.create(this.messageParams(system));
+  createMessage(system?: string, signal?: AbortSignal): Promise<Message> {
+    return this.client.messages.create(this.messageParams(system), { signal });
   }
 
   protected appendUser(userMessage: string): void {
     this.messages.push({ role: "user", content: userMessage });
   }
 
-  protected request(): Promise<Message> {
+  protected request(signal?: AbortSignal): Promise<Message> {
     // Keep compatibility with lightweight clients that implement only create().
-    if (typeof this.client.messages.stream !== "function") return this.createMessage();
-    const stream = this.client.messages.stream(this.messageParams());
+    if (typeof this.client.messages.stream !== "function") return this.createMessage(undefined, signal);
+    const stream = this.client.messages.stream(this.messageParams(), { signal });
     stream.on("text", (delta) => this.emitTextDelta(delta));
     return stream.finalMessage();
   }

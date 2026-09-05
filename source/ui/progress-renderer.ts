@@ -62,6 +62,10 @@ export class ProgressRenderer {
         this.progressLine(event.message);
         if (this.isTTY) this.startSpinner("Thinking…");
         break;
+      case "turn_interrupted":
+        this.stopTransient();
+        this.ensureProgressBoundary();
+        break;
       case "turn_end":
         this.stopTransient();
         this.ensureProgressBoundary();

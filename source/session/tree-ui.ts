@@ -47,6 +47,10 @@ export function formatTreeRow(entry: ConversationEntry, options: TreeRowOptions 
       label = `result (${event.isError ? "error" : "ok"})`;
       preview = event.content;
       break;
+    case "turn_interrupted":
+      label = "interrupted";
+      preview = "turn stopped by user";
+      break;
   }
   const row = truncate(`${marker}${label}: ${cleanPreview(preview)}`, width);
   if (row.length <= marker.length) return row;
