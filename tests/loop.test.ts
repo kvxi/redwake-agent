@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Message, MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import { AnthropicAgent, textFromMessage } from "../source/agent/anthropic.ts";
@@ -119,6 +122,23 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain(process.cwd());
     expect(prompt).toContain("Available tools:");
     expect(prompt).toContain("- read:");
+  });
+
+  test("includes the project root AGENTS.md with an explicit label", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "redwake-prompt-"));
+    try {
+      writeFileSync(join(cwd, "AGENTS.md"), "Always run the tests.");
+
+      const prompt = buildSystemPrompt({ cwd });
+
+      expect(prompt).toContain(
+        "contains the AGENTS.md file from the project root",
+      );
+      expect(prompt).toContain('<project_instructions path="AGENTS.md">');
+      expect(prompt).toContain("Always run the tests.");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
 

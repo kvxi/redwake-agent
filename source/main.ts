@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { ensureStateDirectories, migrateLegacyState } from "./paths.ts";
 import { modelFor, parseProvider, PROVIDER, PROVIDERS, type Provider } from "./config.ts";
 import { createAgentFactory, type ProviderAgentFactory } from "./agent/factory.ts";
+import { SessionPrompt } from "./agent/session-prompt.ts";
 import { CodexAuthService, type AuthService } from "./auth/service.ts";
 import { ModelCatalog, type ModelDescriptor } from "./codex/models.ts";
 import { discoverApiModels, type ApiProvider } from "./api-models.ts";
@@ -65,6 +66,8 @@ export interface ReplOptions {
   discoverCodexModels?: () => Promise<ModelDescriptor[]>;
   discoverApiModels?: (provider: ApiProvider) => Promise<ModelDescriptor[]>;
   onRuntimeChange?: (patch: Partial<TuiIdentity>) => void;
+  /** Refresh the static repository snapshot after changing sessions. */
+  refreshPrompt?: () => void;
 }
 
 
@@ -360,6 +363,7 @@ export async function runRepl(
           try {
             const created = options.sessions.create();
             pendingEditorText = "";
+            options.refreshPrompt?.();
             rebuildAgent();
             if (options.conversation) io.setConversation?.(options.conversation.entries());
             options.onRuntimeChange?.({ sessionName: created.name, sessionNumber: created.number, eventCount: 0 });
@@ -377,6 +381,7 @@ export async function runRepl(
             continue;
           }
           pendingEditorText = "";
+          options.refreshPrompt?.();
           rebuildAgent();
           if (options.conversation) io.setConversation?.(options.conversation.entries());
           const summary = sessions.find((session) => session.path === path);
@@ -497,10 +502,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const apiKeyFor = (provider: Provider): string | undefined => provider === "anthropic"
     ? process.env.ANTHROPIC_API_KEY || auth.store.getApiKey("anthropic")
     : provider === "openai" ? process.env.OPENAI_API_KEY || auth.store.getApiKey("openai") : undefined;
+  // Generated once at startup (including --resume), then only at session boundaries.
+  const sessionPrompt = new SessionPrompt(workspaceRoot);
   const createAgent = createAgentFactory({
     ctx: createToolContext({ workspaceRoot }),
     workspaceRoot,
     conversation,
+    sessionPrompt,
     apiKeyFor,
     credentials: auth.credentials,
     progress: (event) => tui ? tui.handleProgress(event) : renderer?.handle(event),
@@ -527,6 +535,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         return discoverApiModels(provider, apiKey);
       },
       onRuntimeChange: (patch) => tui?.updateRuntime(patch),
+      refreshPrompt: () => sessionPrompt.refresh(),
     }, io);
   } finally {
     renderer?.dispose();

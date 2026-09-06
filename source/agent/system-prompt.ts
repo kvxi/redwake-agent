@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { tools } from "../tools/registry.ts";
 
 export interface BuildSystemPromptOptions {
@@ -6,7 +8,30 @@ export interface BuildSystemPromptOptions {
   appendSystemPrompt?: string;
   cwd: string;
   contextFiles?: Array<{ path: string; content: string }>;
+  repoMap?: string;
 }
+
+export interface BuiltSystemPrompt {
+  /** Static instructions before the repository map. */
+  prefix: string;
+  /** The final static repository-map block, when available. */
+  repoMap?: string;
+  /** Complete provider-neutral prompt text. */
+  text: string;
+}
+
+/** Build structured prompt parts for provider caching. */
+export function buildSystemPromptParts(options: BuildSystemPromptOptions): BuiltSystemPrompt {
+  const prefix = buildSystemPrompt({ ...options, repoMap: undefined });
+  const repoMap = options.repoMap?.trim();
+  return {
+    prefix,
+    ...(repoMap ? { repoMap } : {}),
+    text: repoMap ? `${prefix}\n\n${repoMap}` : prefix,
+  };
+}
+
+/** Legacy string builder; prefer buildSystemPromptParts for provider requests. */
 export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
   const {
     customPrompt,
@@ -18,7 +43,23 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
   const promptCwd = cwd.replace(/\\/g, "/");
   const appendSection = appendSystemPrompt ? `\n\n${appendSystemPrompt}` : "";
-  const contextFiles = providedContextFiles ?? [];
+  let agentsContext: string | undefined;
+  try {
+    agentsContext = readFileSync(join(cwd, "AGENTS.md"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  const contextFiles = [
+    ...(agentsContext === undefined
+      ? []
+      : [{ path: "AGENTS.md", content: agentsContext }]),
+    ...(providedContextFiles ?? []),
+  ];
+  const contextIntroduction = agentsContext === undefined
+    ? "Project-specific instructions and guidelines:"
+    : "Project-specific instructions and guidelines follow. The project_instructions block with path=\"AGENTS.md\" contains the AGENTS.md file from the project root:";
   const toolDescriptions = tools
     .map((tool) => `- ${tool.name}: ${tool.description}`)
     .join("\n");
@@ -26,13 +67,14 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
   if (customPrompt) {
     let prompt = customPrompt + appendSection;
     if (contextFiles.length > 0) {
-      prompt += "\n\n<project_context>\n\nProject-specific instructions and guidelines:\n\n";
+      prompt += `\n\n<project_context>\n\n${contextIntroduction}\n\n`;
       for (const { path: filePath, content } of contextFiles) {
         prompt += `<project_instructions path="${filePath}">\n${content}\n</project_instructions>\n\n`;
       }
       prompt += "</project_context>\n";
     }
-    return `${prompt}\nCurrent working directory: ${promptCwd}\n`;
+    const prefix = `${prompt}\nCurrent working directory: ${promptCwd}`;
+    return options.repoMap?.trim() ? `${prefix}\n\n${options.repoMap.trim()}` : `${prefix}\n`;
   }
 
   const guidelinesList: string[] = [];
@@ -55,7 +97,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 	}
   const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
 
-  let prompt = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+  let prompt = `You are an expert coding assistant operating inside Redwake Agent, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files. The repo map reflects the working tree when the current session was initialized or loaded. Use tools to verify current file contents before editing. AGENTS.md is hand-maintained and may lag. Verify against the file before relying on a specific detail.
 
 Available tools:
 ${toolDescriptions}
@@ -68,7 +110,7 @@ ${guidelines}`;
 	}
   if (contextFiles.length > 0) {
 		prompt += "\n\n<project_context>\n\n";
-		prompt += "Project-specific instructions and guidelines:\n\n";
+		prompt += `${contextIntroduction}\n\n`;
 		for (const { path: filePath, content } of contextFiles) {
 			prompt += `<project_instructions path="${filePath}">\n${content}\n</project_instructions>\n\n`;
 		}
@@ -76,6 +118,7 @@ ${guidelines}`;
 	}
 
   prompt += `\nCurrent working directory: ${promptCwd}`;
+  if (options.repoMap?.trim()) prompt += `\n\n${options.repoMap.trim()}`;
 
   return prompt;
 

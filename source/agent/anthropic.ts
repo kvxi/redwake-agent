@@ -11,7 +11,7 @@ import {
   type AgentBaseOptions,
   type NormalizedToolCall,
 } from "./base.ts";
-import { buildSystemPrompt } from "./system-prompt.ts";
+import { buildSystemPrompt, type BuiltSystemPrompt } from "./system-prompt.ts";
 import { toAnthropicHistory } from "./history.ts";
 
 export interface AnthropicAgentOptions extends AgentBaseOptions {
@@ -41,12 +41,22 @@ export class AnthropicAgent extends AgentBase<Message, ToolResultBlockParam> {
     this.messages = toAnthropicHistory(this.conversation.snapshot(600_000));
   }
 
+  private systemBlocks(prompt: BuiltSystemPrompt): Anthropic.TextBlockParam[] {
+    if (prompt.repoMap) {
+      return [
+        { type: "text", text: prompt.prefix },
+        { type: "text", text: prompt.repoMap, cache_control: { type: "ephemeral" } },
+      ];
+    }
+    return [{ type: "text", text: prompt.prefix, cache_control: { type: "ephemeral" } }];
+  }
+
   private messageParams(system?: string): Anthropic.MessageCreateParamsNonStreaming {
     return {
       model: this.model,
       max_tokens: MAX_TOKENS,
       messages: this.messages,
-      system: system ?? buildSystemPrompt({ cwd: this.workspaceRoot }),
+      system: system ?? (this.systemPrompt ? this.systemBlocks(this.systemPrompt) : buildSystemPrompt({ cwd: this.workspaceRoot })),
       tools: this.anthropicTools,
     };
   }

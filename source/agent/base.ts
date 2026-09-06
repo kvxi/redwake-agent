@@ -4,6 +4,7 @@ import { createToolContext, type ToolContext } from "../tools/context.ts";
 import { runTool } from "../tools/registry.ts";
 import type { Conversation } from "./conversation.ts";
 import type { AgentProgressEvent, AgentProgressHandler } from "./progress.ts";
+import type { BuiltSystemPrompt } from "./system-prompt.ts";
 
 export interface AgentBaseOptions {
   ctx?: ToolContext;
@@ -13,6 +14,8 @@ export interface AgentBaseOptions {
   progress?: AgentProgressHandler;
   /** Shared canonical history. A private state is created for compatibility. */
   conversation?: ConversationState;
+  /** Immutable prompt snapshot for the active session. */
+  systemPrompt?: BuiltSystemPrompt;
   /** @deprecated Persistence is owned by ConversationState. */
   store?: SessionStore;
 }
@@ -31,6 +34,7 @@ export abstract class AgentBase<Response, ToolResult> implements Conversation {
   protected readonly ctx: ToolContext;
   protected readonly conversation: ConversationState;
   protected readonly workspaceRoot: string;
+  protected readonly systemPrompt?: BuiltSystemPrompt;
   private readonly print: (text: string) => void;
   private readonly progress?: AgentProgressHandler;
   private requestStreamedText = false;
@@ -38,6 +42,7 @@ export abstract class AgentBase<Response, ToolResult> implements Conversation {
   protected constructor(options: AgentBaseOptions = {}) {
     this.ctx = options.ctx ?? createToolContext({ workspaceRoot: options.workspaceRoot });
     this.workspaceRoot = options.workspaceRoot ?? process.cwd();
+    this.systemPrompt = options.systemPrompt;
     this.print = options.print ?? ((text) => console.log(text));
     this.progress = options.progress;
     this.conversation = options.conversation ?? new ConversationState(options.store);
