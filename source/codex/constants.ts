@@ -2,7 +2,7 @@
 export const CODEX_COMPATIBILITY = {
   // This is the Codex protocol/client version, not Redwake's package version.
   // The model-catalog endpoint validates it via both the query string and header.
-  clientVersion: "0.144.1",
+  clientVersion: "0.153.4",
   clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
   authorizeUrl: "https://auth.openai.com/oauth/authorize",
   tokenUrl: "https://auth.openai.com/oauth/token",
