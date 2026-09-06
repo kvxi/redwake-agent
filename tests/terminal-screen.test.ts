@@ -16,6 +16,7 @@ test("terminal screen owns and idempotently restores terminal lifecycle", () => 
   screen.start();
   expect(input.isRaw).toBe(true);
   expect(output.writes[0]).toContain("\x1b[>1u");
+  expect(output.writes[0]).toContain("\x1b[?2004h");
   screen.render({ lines: ["one"], cursor: { row: 1, column: 2 } });
   screen.render({ lines: ["one"], cursor: { row: 1, column: 2 } });
   expect(output.writes[1]).toContain("\x1b[2Kone");
@@ -24,6 +25,32 @@ test("terminal screen owns and idempotently restores terminal lifecycle", () => 
   expect(input.isRaw).toBe(false);
   expect(output.writes.filter((text) => text.includes("?1049l"))).toHaveLength(1);
   expect(output.writes.at(-1)).toContain("\x1b[<u");
+  expect(output.writes.at(-1)).toContain("\x1b[?2004l");
+});
+
+test("terminal screen buffers bracketed paste as one event", () => {
+  const { input, output } = fakeTerminal();
+  const keys: string[] = [];
+  const pastes: string[] = [];
+  const screen = new TerminalScreen({
+    input: input as never,
+    output: output as never,
+    onKey: (text) => keys.push(text),
+    onPaste: (text) => pastes.push(text),
+  });
+  screen.start();
+
+  input.emit("data", "before");
+  const encoded = Buffer.from("\x1b[200~first\n界second\u0003\x1b[201~");
+  const unicodeByte = encoded.indexOf(Buffer.from("界"));
+  input.emit("data", encoded.subarray(0, 4));
+  input.emit("data", encoded.subarray(4, unicodeByte + 1));
+  input.emit("data", encoded.subarray(unicodeByte + 1));
+  input.emit("data", "after");
+
+  expect(pastes).toEqual(["first\n界second\u0003"]);
+  expect(keys.join("")).toBe("beforeafter");
+  screen.dispose();
 });
 
 test("terminal screen decodes progressive Ctrl-A keyboard reports", () => {

@@ -39,6 +39,7 @@ export class TuiApp implements ReplIO {
     this.state = createTuiState(options.identity);
     this.screen = options.screen ?? new TerminalScreen({
       onKey: (text, key) => this.handleKey(text, key),
+      onPaste: (text) => this.handlePaste(text),
       onResize: (columns, rows) => { this.state = resizeState(this.state, columns, rows); this.renderNow(); },
     });
     this.state = resizeState(this.state, this.screen.columns, this.screen.rows);
@@ -184,6 +185,14 @@ export class TuiApp implements ReplIO {
     this.state = { ...this.state, overlay: { title, rows: items.map(rows), selected: list.selected, offset: list.offset, footer } };
     this.renderNow();
     return new Promise((resolve) => { this.overlay = { state: list, rows, resolve, activate } as PendingOverlay<unknown>; });
+  }
+
+  handlePaste(text: string): void {
+    if (this.overlay || !this.pending || !text) return;
+    this.exitArmedAt = undefined;
+    const edited = editInput(this.state.input, { type: "paste", text });
+    this.state = { ...this.state, input: { ...this.state.input, value: edited.value, cursor: edited.cursor, selection: edited.selection } };
+    this.renderNow();
   }
 
   handleKey(text: string, key: TerminalKey): void {

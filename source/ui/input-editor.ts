@@ -1,7 +1,7 @@
 export interface EditorSelection { start: number; end: number }
 
 export type EditorAction =
-  | { type: "insert"; text: string }
+  | { type: "insert" | "paste"; text: string }
   | { type: "left" | "right" | "home" | "end" | "backspace" | "delete" | "kill-start" | "kill-end" | "select-all" }
   | { type: "submit" | "cancel" | "eof" };
 
@@ -35,8 +35,11 @@ export function editInput(state: EditorState, action: EditorAction): EditorResul
     : { value, cursor };
 
   switch (action.type) {
-    case "insert": {
-      const text = action.text.replace(/[\r\n]+/g, " ").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+    case "insert":
+    case "paste": {
+      const text = action.type === "paste"
+        ? action.text.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "")
+        : action.text.replace(/[\r\n]+/g, " ").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
       return {
         value: withoutSelection.value.slice(0, withoutSelection.cursor) + text + withoutSelection.value.slice(withoutSelection.cursor),
         cursor: withoutSelection.cursor + text.length,

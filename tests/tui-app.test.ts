@@ -53,6 +53,38 @@ test("secret prompts mask pasted API keys", async () => {
   app.close();
 });
 
+test("bracketed paste preserves multiline input and waits for explicit submission", async () => {
+  const screen = new FakeScreen();
+  const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });
+  const answer = app.readLine({ kind: "message", label: ">" });
+  let resolved = false;
+  void answer.then(() => { resolved = true; });
+
+  app.handlePaste("first line\r\nsecond line\u0003\u0004");
+  await Promise.resolve();
+  expect(resolved).toBe(false);
+  expect(app.state.input.value).toBe("first line\nsecond line");
+  expect(screen.frames.at(-1)?.lines.join("\n")).toContain("second line");
+
+  app.handleKey("", { name: "return" });
+  expect(await answer).toBe("first line\nsecond line");
+  app.close();
+});
+
+test("paste replaces the active selection and remains masked in secret prompts", async () => {
+  const screen = new FakeScreen();
+  const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });
+  const answer = app.readLine({ kind: "choice", label: "API key:", initialText: "old", secret: true });
+  app.handleKey("\u0001", { name: "a", ctrl: true });
+  app.handlePaste("new-secret");
+
+  expect(app.state.input.value).toBe("new-secret");
+  expect(screen.frames.at(-1)?.lines.join("\n")).not.toContain("new-secret");
+  app.handleKey("", { name: "return" });
+  expect(await answer).toBe("new-secret");
+  app.close();
+});
+
 test("Ctrl-A selects only the active user input and typing replaces it", async () => {
   const screen = new FakeScreen();
   const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });

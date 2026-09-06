@@ -36,6 +36,19 @@ test("active input box expands to show wrapped prompt rows", () => {
   expect(visible.join("")).toContain("a".repeat(16));
 });
 
+test("multiline pasted input uses distinct rows and follows the cursor", () => {
+  const initial = createTuiState({ provider: "anthropic", model: "claude", cwd: "/tmp", sessionName: "new", eventCount: 0 }, 24, 10);
+  const value = "first line\nsecond line";
+  const state = { ...initial, input: { ...initial.input, active: true, value, cursor: value.length } };
+  const frame = renderFrame(state, createTheme(false));
+  const visible = frame.lines.map(stripAnsi);
+
+  expect(visible.some((line) => line.includes("> first line"))).toBe(true);
+  expect(visible.some((line) => line.includes("second line"))).toBe(true);
+  expect(frame.cursor?.row).toBe(8);
+  expect(frame.cursor?.column).toBe(13);
+});
+
 for (const width of [30, 60, 89, 90, 120]) {
   test(`TUI frame remains bounded at ${width} columns`, () => {
     const state = createTuiState({ provider: "anthropic", model: "claude", cwd: "/a/very/long/界/workspace", sessionName: "session-46.jsonl", sessionNumber: 46, eventCount: 12 }, width, 20);

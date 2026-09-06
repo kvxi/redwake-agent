@@ -7,6 +7,7 @@ export interface TerminalScreenOptions {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
   onKey?: (text: string, key: TerminalKey) => void;
+  onPaste?: (text: string) => void;
   onResize?: (columns: number, rows: number) => void;
 }
 
@@ -14,17 +15,20 @@ export class TerminalScreen {
   private readonly input: NodeJS.ReadStream;
   private readonly output: NodeJS.WriteStream;
   private readonly onKey?: TerminalScreenOptions["onKey"];
+  private readonly onPaste?: TerminalScreenOptions["onPaste"];
   private readonly onResize?: TerminalScreenOptions["onResize"];
   private previous: string[] = [];
   private previousSoftWrapRows = new Set<number>();
   private started = false;
   private disposed = false;
   private wasRaw = false;
+  private pasteBuffer?: string;
 
   constructor(options: TerminalScreenOptions = {}) {
     this.input = options.input ?? stdin;
     this.output = options.output ?? stdout;
     this.onKey = options.onKey;
+    this.onPaste = options.onPaste;
     this.onResize = options.onResize;
   }
 
@@ -76,13 +80,32 @@ export class TerminalScreen {
     if (this.started) {
       this.input.off("keypress", this.handleKeypress);
       this.output.off("resize", this.handleResize);
+      this.pasteBuffer = undefined;
       try { this.input.setRawMode?.(this.wasRaw); } catch { /* best-effort restoration */ }
       try { this.output.write("\x1b[0m\x1b[?25h\x1b[?2004l\x1b[<u\x1b[?1049l"); } catch { /* output may already be closed */ }
       if (!this.wasRaw) { try { this.input.pause(); } catch { /* input may already be closed */ } }
     }
   }
 
-  private handleKeypress = (text: string, key: TerminalKey): void => {
+  private handleKeypress = (text: string | undefined, key: TerminalKey): void => {
+    const sequence = key.sequence ?? text ?? "";
+    if (key.name === "paste-start" || sequence === "\x1b[200~") {
+      this.pasteBuffer = "";
+      return;
+    }
+    if (key.name === "paste-end" || sequence === "\x1b[201~") {
+      if (this.pasteBuffer !== undefined) {
+        const pasted = this.pasteBuffer;
+        this.pasteBuffer = undefined;
+        this.onPaste?.(pasted);
+      }
+      return;
+    }
+    if (this.pasteBuffer !== undefined) {
+      this.pasteBuffer += sequence;
+      return;
+    }
+
     // Node's readline parser does not currently decode the Kitty keyboard
     // protocol used by several modern terminals, so normalize its CSI-u form.
     const match = key.sequence?.match(/^\x1b\[(\d+)(?:;(\d+)(?::\d+)?)?u$/);
@@ -106,7 +129,7 @@ export class TerminalScreen {
         return;
       }
     }
-    this.onKey?.(text, key);
+    this.onKey?.(text ?? "", key);
   };
   private handleResize = (): void => { this.previous = []; this.onResize?.(this.columns, this.rows); };
 }

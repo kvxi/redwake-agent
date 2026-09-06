@@ -9,6 +9,14 @@ test("input editor supports insertion, movement, deletion, and paste normalizati
   expect(editInput(state, { type: "kill-start" })).toEqual({ value: "c", cursor: 0 });
 });
 
+test("bracketed paste preserves lines, normalizes CRLF, and replaces a selection", () => {
+  const state = editInput(
+    { value: "replace me", cursor: 10, selection: { start: 0, end: 10 } },
+    { type: "paste", text: "const x = 1;\r\n\treturn x;\x1b\x03" },
+  );
+  expect(state).toEqual({ value: "const x = 1;\n\treturn x;", cursor: 23 });
+});
+
 test("Ctrl-D exits only on empty input", () => {
   expect(editInput({ value: "", cursor: 0 }, { type: "eof" }).outcome).toBe("eof");
   expect(editInput({ value: "x", cursor: 1 }, { type: "eof" }).outcome).toBeUndefined();
