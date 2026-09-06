@@ -41,6 +41,43 @@ test("output can be scrolled and remains anchored while a response streams", () 
   app.close();
 });
 
+test("mouse clicks place the input cursor, clear selection, and preserve editing", async () => {
+  const screen = new FakeScreen();
+  const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });
+  const answer = app.readLine({ kind: "message", label: ">", initialText: "ac" });
+  app.handleKey("\u0001", { name: "a", ctrl: true });
+
+  // At this size the single input content row is row 14 and text starts at 4.
+  app.handleMouse({ action: "press", button: "left", row: 14, column: 5, shift: false, meta: false, ctrl: false });
+  expect(app.state.input.cursor).toBe(1);
+  expect(app.state.input.selection).toBeUndefined();
+  app.handleKey("b", { sequence: "b" });
+  expect(app.state.input.value).toBe("abc");
+
+  const frameCount = screen.frames.length;
+  app.handleMouse({ action: "release", button: "left", row: 14, column: 4, shift: false, meta: false, ctrl: false });
+  app.handleMouse({ action: "press", button: "left", row: 1, column: 1, shift: false, meta: false, ctrl: false });
+  expect(app.state.input.cursor).toBe(2);
+  expect(screen.frames).toHaveLength(frameCount);
+
+  app.handleKey("", { name: "return" });
+  expect(await answer).toBe("abc");
+  app.close();
+});
+
+test("mouse wheel uses transcript scrolling while input is active", () => {
+  const screen = new FakeScreen();
+  const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });
+  for (let index = 0; index < 30; index += 1) app.append({ text: `output ${index}` });
+  void app.readLine({ kind: "message", label: ">" });
+  app.handleMouse({ action: "wheel", wheel: "up", row: 1, column: 1, shift: false, meta: false, ctrl: false });
+  expect(app.state.followOutput).toBe(false);
+  const offset = app.state.scrollOffset;
+  app.handleMouse({ action: "wheel", wheel: "down", row: 1, column: 1, shift: false, meta: false, ctrl: false });
+  expect(app.state.scrollOffset).toBe(offset + 1);
+  app.close();
+});
+
 test("secret prompts mask pasted API keys", async () => {
   const screen = new FakeScreen();
   const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });
@@ -48,8 +85,32 @@ test("secret prompts mask pasted API keys", async () => {
   const frame = screen.frames.at(-1)!;
   expect(frame.lines.join("\n")).not.toContain("sk-secret");
   expect(frame.lines.join("\n")).toContain("•••••••••");
+  app.handleMouse({ action: "press", button: "left", row: 14, column: 13, shift: false, meta: false, ctrl: false });
+  app.handleKey("X", { sequence: "X" });
+  expect(screen.frames.at(-1)?.lines.join("\n")).not.toContain("skX-secret");
   app.handleKey("", { name: "return" });
-  expect(await answer).toBe("sk-secret");
+  expect(await answer).toBe("skX-secret");
+  app.close();
+});
+
+test("alternate Enter encodings insert newlines without submitting", async () => {
+  const screen = new FakeScreen();
+  const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "session-1.jsonl", eventCount: 0 }, screen, color: false });
+  const answer = app.readLine({ kind: "message", label: ">", initialText: "first" });
+  let resolved = false;
+  void answer.then(() => { resolved = true; });
+
+  app.handleKey("\n", { name: "enter", sequence: "\n", shift: false });
+  await Promise.resolve();
+  expect(resolved).toBe(false);
+  expect(app.state.input.value).toBe("first\n");
+  expect(app.state.input.cursor).toBe(6);
+
+  app.handleKey("second", { sequence: "second" });
+  app.handleKey("", { name: "return", sequence: "\x1b\r", meta: true });
+  app.handleKey("third", { sequence: "third" });
+  app.handleKey("", { name: "return" });
+  expect(await answer).toBe("first\nsecond\nthird");
   app.close();
 });
 

@@ -2,7 +2,8 @@ export interface EditorSelection { start: number; end: number }
 
 export type EditorAction =
   | { type: "insert" | "paste"; text: string }
-  | { type: "left" | "right" | "home" | "end" | "backspace" | "delete" | "kill-start" | "kill-end" | "select-all" }
+  | { type: "set-cursor"; cursor: number }
+  | { type: "left" | "right" | "home" | "end" | "backspace" | "delete" | "kill-start" | "kill-end" | "select-all" | "newline" }
   | { type: "submit" | "cancel" | "eof" };
 
 export interface EditorState { value: string; cursor: number; selection?: EditorSelection }
@@ -35,6 +36,10 @@ export function editInput(state: EditorState, action: EditorAction): EditorResul
     : { value, cursor };
 
   switch (action.type) {
+    case "set-cursor": {
+      const target = Math.min(Math.max(0, action.cursor), value.length);
+      return { value, cursor: points.findLast((point) => point <= target) ?? 0 };
+    }
     case "insert":
     case "paste": {
       const text = action.type === "paste"
@@ -46,6 +51,10 @@ export function editInput(state: EditorState, action: EditorAction): EditorResul
       };
     }
     case "select-all": return value ? { value, cursor: value.length, selection: { start: 0, end: value.length } } : { value, cursor: 0 };
+    case "newline": return {
+      value: withoutSelection.value.slice(0, withoutSelection.cursor) + "\n" + withoutSelection.value.slice(withoutSelection.cursor),
+      cursor: withoutSelection.cursor + 1,
+    };
     case "left": return { value, cursor: selection ? selection.start : previous };
     case "right": return { value, cursor: selection ? selection.end : next };
     case "home": return { value, cursor: 0 };

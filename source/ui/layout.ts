@@ -105,7 +105,13 @@ interface InputLayout {
 const inputSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** Wrap editor text without dropping whitespace, so cursor/selection offsets stay exact. */
-function wrapInput(value: string, firstWidth: number, continuationWidth: number): InputRow[] {
+function displayInputSlice(value: string, start: number, end: number, secret?: boolean): string {
+  const slice = value.slice(start, end);
+  if (!secret) return slice;
+  return [...inputSegmenter.segment(slice)].map(() => "•").join("");
+}
+
+function wrapInput(value: string, firstWidth: number, continuationWidth: number, secret?: boolean): InputRow[] {
   const rows: InputRow[] = [];
   let start = 0;
   let text = "";
@@ -113,15 +119,16 @@ function wrapInput(value: string, firstWidth: number, continuationWidth: number)
   let width = firstWidth;
   for (const part of inputSegmenter.segment(value)) {
     const index = part.index;
-    const segment = part.segment;
-    if (segment === "\n" || segment === "\r\n" || segment === "\r") {
+    const sourceSegment = part.segment;
+    if (sourceSegment === "\n" || sourceSegment === "\r\n" || sourceSegment === "\r") {
       rows.push({ text, start, end: index });
-      start = index + segment.length;
+      start = index + sourceSegment.length;
       text = "";
       used = 0;
       width = continuationWidth;
       continue;
     }
+    const segment = secret ? "•" : sourceSegment;
     const partWidth = displayWidth(segment);
     if (text && used + partWidth > width) {
       rows.push({ text, start, end: index });
@@ -133,8 +140,8 @@ function wrapInput(value: string, firstWidth: number, continuationWidth: number)
     // A double-width glyph cannot fit in a one-column terminal. Truncation is
     // preferable to letting the input box paint into its border.
     if (!text && partWidth > width) {
-      rows.push({ text: truncateEnd(segment, width), start, end: index + segment.length });
-      start = index + segment.length;
+      rows.push({ text: truncateEnd(segment, width), start, end: index + sourceSegment.length });
+      start = index + sourceSegment.length;
       width = continuationWidth;
       continue;
     }
@@ -152,15 +159,14 @@ function inputLayout(state: TuiState): InputLayout {
   const label = truncateEnd(state.input.label, Math.max(1, Math.floor(inner / 2)));
   const before = `${label} `;
   const firstWidth = Math.max(1, inner - displayWidth(before));
-  const displayValue = state.input.secret ? "•".repeat(state.input.value.length) : state.input.value;
-  const rows = wrapInput(displayValue, firstWidth, inner);
+  const rows = wrapInput(state.input.value, firstWidth, inner, state.input.secret);
   let cursorRow = 0;
   for (let index = 0; index < rows.length; index += 1) {
     if (rows[index]!.start <= state.input.cursor) cursorRow = index;
   }
   const cursor = Math.min(rows[cursorRow]!.end, Math.max(rows[cursorRow]!.start, state.input.cursor));
   const cursorColumn = (cursorRow === 0 ? displayWidth(before) : 0)
-    + displayWidth(displayValue.slice(rows[cursorRow]!.start, cursor));
+    + displayWidth(displayInputSlice(state.input.value, rows[cursorRow]!.start, cursor, state.input.secret));
 
   // Always retain a transcript row and the status line. Very large prompts
   // become a cursor-following window, while ordinary wrapped prompts show in full.
@@ -177,6 +183,35 @@ function inputLayout(state: TuiState): InputLayout {
     promptRows: boxed ? visibleCount + 2 : 1,
     inner,
   };
+}
+
+/** Resolve a 1-based terminal coordinate to an editor UTF-16 offset. */
+export function inputOffsetAt(state: TuiState, row: number, column: number): number | undefined {
+  if (!state.input.active || !Number.isInteger(row) || !Number.isInteger(column)) return undefined;
+  const editor = inputLayout(state);
+  const viewportHeight = Math.max(1, Math.max(3, state.rows) - editor.promptRows - 1);
+  const firstContentRow = viewportHeight + (editor.boxed ? 2 : 1);
+  const visibleRow = row - firstContentRow;
+  if (visibleRow < 0 || visibleRow >= editor.rows.length) return undefined;
+  if (column < 1 || column > state.columns) return undefined;
+  if (editor.boxed && (column === 1 || column === state.columns)) return undefined;
+
+  const inputRow = editor.rows[visibleRow]!;
+  const logicalRow = editor.visibleStart + visibleRow;
+  const contentColumn = column - (editor.boxed ? 2 : 1);
+  const prefixWidth = logicalRow === 0 ? displayWidth(editor.before) : 0;
+  if (contentColumn < prefixWidth) return inputRow.start;
+  const clicked = contentColumn - prefixWidth;
+  let used = 0;
+  for (const part of inputSegmenter.segment(state.input.value.slice(inputRow.start, inputRow.end))) {
+    const width = state.input.secret ? 1 : displayWidth(part.segment);
+    const before = inputRow.start + part.index;
+    if (clicked <= used) return before;
+    // For a wide grapheme, its second display cell resolves after the glyph.
+    if (clicked < used + width) return before + part.segment.length;
+    used += width;
+  }
+  return inputRow.end;
 }
 
 /** The scroll range used by both rendering and the keyboard handler. */

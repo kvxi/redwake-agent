@@ -17,6 +17,23 @@ test("bracketed paste preserves lines, normalizes CRLF, and replaces a selection
   expect(state).toEqual({ value: "const x = 1;\n\treturn x;", cursor: 23 });
 });
 
+test("direct cursor placement is grapheme-safe and clears selections", () => {
+  const value = "a👩‍💻éz";
+  expect(editInput(
+    { value, cursor: value.length, selection: { start: 0, end: value.length } },
+    { type: "set-cursor", cursor: 3 },
+  )).toEqual({ value, cursor: 1 });
+  expect(editInput({ value, cursor: 0 }, { type: "set-cursor", cursor: 999 })).toEqual({ value, cursor: value.length });
+});
+
+test("newline inserts a line break at the cursor and replaces a selection", () => {
+  expect(editInput({ value: "firstsecond", cursor: 5 }, { type: "newline" })).toEqual({ value: "first\nsecond", cursor: 6 });
+  expect(editInput(
+    { value: "first middle second", cursor: 12, selection: { start: 5, end: 12 } },
+    { type: "newline" },
+  )).toEqual({ value: "first\n second", cursor: 6 });
+});
+
 test("Ctrl-D exits only on empty input", () => {
   expect(editInput({ value: "", cursor: 0 }, { type: "eof" }).outcome).toBe("eof");
   expect(editInput({ value: "x", cursor: 1 }, { type: "eof" }).outcome).toBeUndefined();

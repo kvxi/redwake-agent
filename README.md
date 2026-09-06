@@ -16,6 +16,10 @@ rwa --version
 
 In the TUI navigate up and down with arrow keys, including while a
 response is streaming. Press **End** to return to and follow the newest output.
+While writing a prompt, press **Shift+Enter** to insert a newline and **Enter**
+to send. The built-in macOS Terminal does not transmit the Shift modifier for
+Enter; there, use **Ctrl+J** (or **Option+Enter** with “Use Option as Meta key”
+enabled) to insert a newline.
 
 On first run, the agent asks you to choose a provider and then authenticates it.
 Anthropic and OpenAI API keys are pasted into a masked prompt and stored in the

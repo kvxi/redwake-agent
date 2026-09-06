@@ -5,9 +5,9 @@ import { buildTreeRows, formatTreeDisplayRow, type TreeDisplayRow } from "../ses
 import { formatSessionListItem, NEW_SESSION, sessionListItems, type SessionSelection } from "../session/sessions-ui.ts";
 import type { InputRequest, ReplIO } from "../main.ts";
 import { editInput, type EditorAction } from "./input-editor.ts";
-import { renderFrame, transcriptScrollRange } from "./layout.ts";
+import { inputOffsetAt, renderFrame, transcriptScrollRange } from "./layout.ts";
 import { reduceList, type ListKey, type ListState } from "./list-overlay.ts";
-import { TerminalScreen, type TerminalKey } from "./terminal-screen.ts";
+import { TerminalScreen, type TerminalKey, type TerminalMouseEvent } from "./terminal-screen.ts";
 import { createTheme, type Theme } from "./theme.ts";
 import { createTuiState, resizeState, updateActivity, updateIdentity, type NoticeTone, type TranscriptBlock, type TuiIdentity, type TuiState } from "./tui-state.ts";
 import { formatDuration, summarizeToolCall, summarizeToolName } from "./tool-summary.ts";
@@ -40,6 +40,7 @@ export class TuiApp implements ReplIO {
     this.screen = options.screen ?? new TerminalScreen({
       onKey: (text, key) => this.handleKey(text, key),
       onPaste: (text) => this.handlePaste(text),
+      onMouse: (event) => this.handleMouse(event),
       onResize: (columns, rows) => { this.state = resizeState(this.state, columns, rows); this.renderNow(); },
     });
     this.state = resizeState(this.state, this.screen.columns, this.screen.rows);
@@ -195,6 +196,20 @@ export class TuiApp implements ReplIO {
     this.renderNow();
   }
 
+  handleMouse(event: TerminalMouseEvent): void {
+    if (event.action === "wheel") {
+      if (!this.overlay) this.scrollTranscript(event.wheel === "up" ? -1 : 1);
+      return;
+    }
+    if (event.action !== "press" || event.button !== "left" || this.overlay || !this.pending) return;
+    const cursor = inputOffsetAt(this.state, event.row, event.column);
+    if (cursor === undefined) return;
+    this.exitArmedAt = undefined;
+    const edited = editInput(this.state.input, { type: "set-cursor", cursor });
+    this.state = { ...this.state, input: { ...this.state.input, value: edited.value, cursor: edited.cursor, selection: edited.selection } };
+    this.renderNow();
+  }
+
   handleKey(text: string, key: TerminalKey): void {
     if (this.overlay) { this.exitArmedAt = undefined; this.handleOverlayKey(key); return; }
     const ctrlC = (key.ctrl && key.name === "c") || (key.sequence ?? text) === "\u0003";
@@ -227,16 +242,9 @@ export class TuiApp implements ReplIO {
     const scrollDirection = key.name === "pageup" || key.name === "up" ? -1
       : key.name === "pagedown" || key.name === "down" ? 1 : 0;
     if (scrollDirection || key.name === "end") {
-      const { viewportHeight, maxScroll } = transcriptScrollRange(this.state, this.theme);
-      const current = this.state.followOutput ? maxScroll : Math.min(maxScroll, Math.max(0, this.state.scrollOffset));
-      if (key.name === "end") {
-        this.state = { ...this.state, followOutput: true, scrollOffset: maxScroll };
-      } else {
-        const delta = key.name === "pageup" || key.name === "pagedown" ? Math.max(1, viewportHeight - 1) : 1;
-        const scrollOffset = Math.min(maxScroll, Math.max(0, current + scrollDirection * delta));
-        this.state = { ...this.state, followOutput: scrollOffset === maxScroll, scrollOffset };
-      }
-      this.renderNow(); return;
+      if (key.name === "end") this.scrollTranscript(0);
+      else this.scrollTranscript(scrollDirection, key.name === "pageup" || key.name === "pagedown");
+      return;
     }
     if (!this.pending) return;
     const action = this.editorAction(text, key);
@@ -250,6 +258,19 @@ export class TuiApp implements ReplIO {
       const answer = edited.outcome === "submit" ? edited.value : null;
       if (answer !== null && pending.request.kind === "message" && answer !== "") this.push({ id: this.nextId++, revision: 0, kind: "user", text: answer }, false);
       this.renderNow(); pending.resolve(answer); return;
+    }
+    this.renderNow();
+  }
+
+  private scrollTranscript(direction: -1 | 0 | 1, page = false): void {
+    const { viewportHeight, maxScroll } = transcriptScrollRange(this.state, this.theme);
+    if (direction === 0) {
+      this.state = { ...this.state, followOutput: true, scrollOffset: maxScroll };
+    } else {
+      const current = this.state.followOutput ? maxScroll : Math.min(maxScroll, Math.max(0, this.state.scrollOffset));
+      const delta = page ? Math.max(1, viewportHeight - 1) : 1;
+      const scrollOffset = Math.min(maxScroll, Math.max(0, current + direction * delta));
+      this.state = { ...this.state, followOutput: scrollOffset === maxScroll, scrollOffset };
     }
     this.renderNow();
   }
@@ -294,6 +315,10 @@ export class TuiApp implements ReplIO {
     if (key.ctrl && key.name === "e") return { type: "end" };
     if (key.ctrl && key.name === "u") return { type: "kill-start" };
     if (key.ctrl && key.name === "k") return { type: "kill-end" };
+    // Some terminals report Shift-Enter explicitly; others encode it as LF
+    // ("enter") or Meta-Return while an ordinary Enter remains CR ("return").
+    const alternateReturn = key.shift || key.meta || key.name === "enter";
+    if (this.pending?.request.kind === "message" && alternateReturn && (key.name === "return" || key.name === "enter")) return { type: "newline" };
     if (key.name === "return" || key.name === "enter") return { type: "submit" };
     if (key.name === "left" || key.name === "right" || key.name === "home" || key.name === "end" || key.name === "backspace" || key.name === "delete") return { type: key.name } as EditorAction;
     if (text && !key.ctrl && !key.meta) return { type: "insert", text };
