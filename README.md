@@ -4,6 +4,9 @@
 
 Redwake Agent is almost ready for public distribution.
 
+INSTALL: curl -fsSL https://redwakeproject.com/install.sh | sh
+Then, add to path by copying and pasting when prompted. Run with "rwa" in any project directory you want
+
 ```sh
 rwa                         # use the current directory as the workspace
 rwa /path/to/project        # use another workspace
