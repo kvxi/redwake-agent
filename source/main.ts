@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { ensureStateDirectories, migrateLegacyState } from "./paths.ts";
 import { modelFor, parseProvider, PROVIDER, PROVIDERS, type Provider } from "./config.ts";
 import { createAgentFactory, type ProviderAgentFactory } from "./agent/factory.ts";
+import { isBroadWorkspace } from "./repo-map.ts";
 import { SessionPrompt } from "./agent/session-prompt.ts";
 import { CodexAuthService, type AuthService } from "./auth/service.ts";
 import { ModelCatalog, type ModelDescriptor } from "./codex/models.ts";
@@ -136,11 +137,18 @@ export async function runRepl(
 
   try {
     if (options.onboarding) {
-      emit("Welcome. First choose a model provider, then log in.\n");
-      const choice = await question(`Provider [${PROVIDERS.join("/")}]:`);
-      if (!choice) return;
-      const selected = parseProvider(choice);
-      if (!selected) { emit(`Invalid provider. Choose ${PROVIDERS.join(" or ")}.\n`); return; }
+      const guidance = `Enter a provider name: ${PROVIDERS.join(", ")}. You can also use /model <provider> or /login <provider>.`;
+      emit(`Welcome. First choose a model provider, then log in.\n${guidance}`);
+      let selected: Provider | undefined;
+      while (!selected) {
+        const choice = await question(`Provider [${PROVIDERS.join("/")}]:`);
+        if (choice === null || choice === "") return;
+        const input = choice.trim();
+        if (input === "/help") { emit(guidance); continue; }
+        const shortcut = /^\/(?:model|login)\s+(\S+)$/.exec(input);
+        selected = parseProvider(shortcut?.[1] ?? input);
+        if (!selected) emit(`Invalid provider. ${guidance}`);
+      }
       provider = selected;
       model = options.modelFor(selected);
       options.onRuntimeChange?.({ provider, model });
@@ -490,31 +498,35 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const useTui = !args.noTui && !args.debug && stdin.isTTY === true && stdout.isTTY === true && process.env.TERM !== "dumb";
   const io: ReplIO = useTui ? new TuiApp({ identity }) : new PlainReplIO(stdin, stdout);
   const tui = useTui ? io as TuiApp : undefined;
-  tui?.setConversation(conversation.entries());
-  if (args.debug) {
-    stdout.write(`Session: ${store.path}${args.resumePath ? ` (resumed ${initialEvents.length} events)` : ""}\n`);
-    stdout.write(`Startup: ${startupProvider}/${startupModel} · cwd ${workspaceRoot} · plain debug mode\n`);
-  } else if (!useTui) {
-    stdout.write(`Redwake Agent · ${startupModel} (${startupProvider}) · ${identity.sessionNumber ? `session ${identity.sessionNumber}` : identity.sessionName} · ${identity.eventCount ? `${identity.eventCount} events` : "new"}\n`);
-  }
-
-  const renderer = useTui ? undefined : new ProgressRenderer({ write: (text) => stdout.write(text), isTTY: false });
-  const apiKeyFor = (provider: Provider): string | undefined => provider === "anthropic"
-    ? process.env.ANTHROPIC_API_KEY || auth.store.getApiKey("anthropic")
-    : provider === "openai" ? process.env.OPENAI_API_KEY || auth.store.getApiKey("openai") : undefined;
-  // Generated once at startup (including --resume), then only at session boundaries.
-  const sessionPrompt = new SessionPrompt(workspaceRoot);
-  const createAgent = createAgentFactory({
-    ctx: createToolContext({ workspaceRoot }),
-    workspaceRoot,
-    conversation,
-    sessionPrompt,
-    apiKeyFor,
-    credentials: auth.credentials,
-    progress: (event) => tui ? tui.handleProgress(event) : renderer?.handle(event),
-  });
-  const catalog = new ModelCatalog(auth.credentials, auth.store);
+  let renderer: ProgressRenderer | undefined;
   try {
+    tui?.setConversation(conversation.entries());
+    if (args.debug) {
+      stdout.write(`Session: ${store.path}${args.resumePath ? ` (resumed ${initialEvents.length} events)` : ""}\n`);
+      stdout.write(`Startup: ${startupProvider}/${startupModel} · cwd ${workspaceRoot} · plain debug mode\n`);
+    } else if (!useTui) {
+      stdout.write(`Redwake Agent · ${startupModel} (${startupProvider}) · ${identity.sessionNumber ? `session ${identity.sessionNumber}` : identity.sessionName} · ${identity.eventCount ? `${identity.eventCount} events` : "new"}\n`);
+    }
+
+    renderer = useTui ? undefined : new ProgressRenderer({ write: (text) => stdout.write(text), isTTY: false });
+    const apiKeyFor = (provider: Provider): string | undefined => provider === "anthropic"
+      ? process.env.ANTHROPIC_API_KEY || auth.store.getApiKey("anthropic")
+      : provider === "openai" ? process.env.OPENAI_API_KEY || auth.store.getApiKey("openai") : undefined;
+    // Generated once at startup (including --resume), then only at session boundaries.
+    if (isBroadWorkspace(workspaceRoot)) {
+      io.append({ text: "Automatic repository mapping is disabled in the home directory or filesystem root. Start rwa in a project directory for repository context.", tone: "warning" });
+    }
+    const sessionPrompt = new SessionPrompt(workspaceRoot);
+    const createAgent = createAgentFactory({
+      ctx: createToolContext({ workspaceRoot }),
+      workspaceRoot,
+      conversation,
+      sessionPrompt,
+      apiKeyFor,
+      credentials: auth.credentials,
+      progress: (event) => tui ? tui.handleProgress(event) : renderer?.handle(event),
+    });
+    const catalog = new ModelCatalog(auth.credentials, auth.store);
     await runRepl({
       provider: startupProvider,
       initialModel: startupModel,

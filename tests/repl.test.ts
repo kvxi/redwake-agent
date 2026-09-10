@@ -439,3 +439,46 @@ describe("runRepl prompts", () => {
     ]);
   });
 });
+
+describe("onboarding recovery", () => {
+  for (const shortcut of ["openai-codex", "/model openai-codex", "/login openai-codex"]) {
+    test(`retries invalid input and help before ${shortcut}`, async () => {
+      const login = mock(async () => ({ identity: "test account" }));
+      const saveModelSelection = mock(() => {});
+      const onRuntimeChange = mock(() => {});
+      const runtime = fakeRuntime({});
+      const { io, writes, question } = fakeIO([
+        "invalid", "/model openai-codex extra", "/login", "/unknown", "/help", shortcut, null,
+      ]);
+      const readLine = io.readLine;
+      io.readLine = mock(async (request) => {
+        if (question.mock.calls.length <= 5) {
+          expect(login).not.toHaveBeenCalled();
+          expect(saveModelSelection).not.toHaveBeenCalled();
+          expect(onRuntimeChange).not.toHaveBeenCalled();
+          expect(runtime.createAgent).not.toHaveBeenCalled();
+        }
+        return readLine(request);
+      });
+      await runRepl({ ...runtime.options, onboarding: true, auth: { login } as never, saveModelSelection, onRuntimeChange }, io);
+      expect(login).toHaveBeenCalledTimes(1);
+      expect(saveModelSelection).toHaveBeenCalledTimes(1);
+      expect(writes.filter((text) => text.startsWith("Invalid provider."))).toHaveLength(4);
+      expect(writes.some((text) => text.startsWith("Enter a provider name:"))).toBe(true);
+      expect(runtime.createAgent).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const inputs of [[null], [""], ["bad", null], ["openai", null], ["openai", ""]]) {
+    test(`cancellation does not complete onboarding: ${JSON.stringify(inputs)}`, async () => {
+      const runtime = fakeRuntime({});
+      const saveModelSelection = mock(() => {});
+      const saveApiKey = mock(() => {});
+      const { io } = fakeIO(inputs);
+      await runRepl({ ...runtime.options, onboarding: true, saveModelSelection, saveApiKey }, io);
+      expect(saveModelSelection).not.toHaveBeenCalled();
+      expect(saveApiKey).not.toHaveBeenCalled();
+      expect(runtime.createAgent).not.toHaveBeenCalled();
+    });
+  }
+});

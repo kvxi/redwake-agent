@@ -59,6 +59,8 @@ export class PlainReplIO implements ReplIO {
     private readonly output: NodeJS.WriteStream = process.stdout,
   ) {
     this.rl = createInterface({ input, output });
+    // EOF must settle a pending question, including an onboarding retry.
+    this.rl.once("close", () => this.close());
   }
 
   async readLine(request: InputRequest): Promise<string | null> {

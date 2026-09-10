@@ -1,4 +1,8 @@
 import { expect, mock, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { generateRepoMap } from "../source/repo-map.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Message } from "@anthropic-ai/sdk/resources/messages";
 import { AnthropicAgent } from "../source/agent/anthropic.ts";
@@ -64,4 +68,34 @@ test("SessionPrompt refreshes only when explicitly requested", () => {
   session.refresh();
   expect(generations).toBe(2);
   expect(session.snapshot()).not.toBe(first);
+});
+
+test("skipped and partial maps preserve context and immutable session snapshots", () => {
+  const root = mkdtempSync(join(tmpdir(), "rwa-prompt-"));
+  try {
+    writeFileSync(join(root, "AGENTS.md"), "Project guidance.");
+    let skipped = true;
+    const session = new SessionPrompt(root, {
+      customPrompt: "Custom instructions.",
+      contextFiles: [{ path: "guide.md", content: "Extra context." }],
+      generateRepoMap: (options) => generateRepoMap({
+        ...options, homeDirectory: skipped ? root : join(root, "other-home"),
+        gitFiles: () => ({ status: 128, stdout: "" }), limits: { entries: 0 },
+      }),
+    });
+    const first = session.snapshot();
+    expect(first.repoMap).toBeUndefined();
+    for (const text of ["Custom instructions.", "Project guidance.", "Extra context."]) expect(first.text).toContain(text);
+    skipped = false;
+    expect(session.snapshot()).toBe(first);
+    session.refresh();
+    const partial = session.snapshot();
+    expect(partial.repoMap).toContain("map truncated");
+    expect(first.repoMap).toBeUndefined();
+    expect(session.snapshot()).toBe(partial);
+    skipped = true;
+    session.refresh();
+    expect(session.snapshot().repoMap).toBeUndefined();
+    expect(partial.repoMap).toContain("map truncated");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

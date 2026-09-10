@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { extname, join, relative, resolve } from "node:path";
+import { closeSync, lstatSync, openSync, opendirSync, readSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { extname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   Node,
@@ -13,6 +14,11 @@ import {
 export interface RepoMapOptions {
   workspaceRoot: string;
   maxTokens?: number;
+  homeDirectory?: string;
+  limits?: Partial<RepoMapLimits>;
+  /** Narrow seams for deterministic budget/transport tests. */
+  now?: () => number;
+  gitFiles?: (root: string) => { status: number | null; stdout: string; error?: unknown };
 }
 
 export interface RepoMapResult {
@@ -43,41 +49,105 @@ function acceptable(path: string): boolean {
     !parts.some((part) => part === ".env" || part.startsWith(".env."));
 }
 
-function isProbablyBinary(path: string): boolean {
-  try {
-    return readFileSync(path).subarray(0, 8_192).includes(0);
-  } catch {
-    return true;
-  }
+export interface RepoMapLimits {
+  files: number;
+  entries: number;
+  depth: number;
+  discoveryMs: number;
+  sourceFiles: number;
+  sourceBytes: number;
+  totalSourceBytes: number;
 }
 
-function discoverFiles(root: string): string[] {
-  const git = spawnSync("git", ["-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  let files: string[] = [];
-  if (git.status === 0) {
-    files = git.stdout.split("\0").filter(Boolean).map(posix);
-  } else {
-    const walk = (directory: string): void => {
-      let entries;
-      try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
-      for (const entry of entries) {
-        if (entry.isSymbolicLink()) continue;
-        const absolute = join(directory, entry.name);
-        const rel = posix(relative(root, absolute));
-        if (!acceptable(rel)) continue;
-        if (entry.isDirectory()) walk(absolute);
-        else if (entry.isFile()) files.push(rel);
+const DEFAULT_LIMITS: RepoMapLimits = {
+  files: 2_000, entries: 10_000, depth: 8, discoveryMs: 1_000,
+  sourceFiles: 200, sourceBytes: 256 * 1024, totalSourceBytes: 4 * 1024 * 1024,
+};
+
+function canonical(path: string): string {
+  try { return realpathSync(path); } catch { return resolve(path); }
+}
+
+export function isBroadWorkspace(root: string, homeDirectory = homedir()): boolean {
+  const path = canonical(root);
+  return path === canonical(homeDirectory) || path === parse(path).root;
+}
+
+/** Reads at most limit bytes, including for files that grow while being read. */
+export function readRepoMapPrefix(path: string, limit: number): Buffer {
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.alloc(limit);
+    let length = 0;
+    while (length < limit) {
+      const count = readSync(fd, buffer, { offset: length, length: limit - length });
+      if (!count) break;
+      length += count;
+    }
+    return buffer.subarray(0, length);
+  } finally { closeSync(fd); }
+}
+
+function discoverFiles(root: string, limits: RepoMapLimits, options: RepoMapOptions): { files: string[]; limited: boolean } {
+  const now = options.now ?? Date.now;
+  const deadline = now() + limits.discoveryMs;
+  let limited = false;
+  let visited = 0;
+  const files: string[] = [];
+  const exhausted = (): boolean => {
+    const stop = files.length >= limits.files || visited >= limits.entries || now() >= deadline;
+    if (stop) limited = true;
+    return stop;
+  };
+  const admit = (path: string): void => {
+    if (!path || isAbsolute(path) || path.split("/").includes("..") || !acceptable(path)) return;
+    try {
+      // Git may report symlinks (including parent directories), unlike the walker.
+      let absolute = root;
+      for (const part of path.split("/")) {
+        absolute = join(absolute, part);
+        if (lstatSync(absolute).isSymbolicLink()) return;
       }
+      if (!lstatSync(absolute).isFile()) return;
+      if (!readRepoMapPrefix(absolute, 8_192).includes(0)) files.push(path);
+    } catch { /* unreadable/disappearing files are optional */ }
+  };
+  const git = (options.gitFiles ?? ((directory: string) => spawnSync("git", ["-C", directory, "ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+    encoding: "utf8", maxBuffer: 2 * 1024 * 1024, timeout: 1_000,
+  })))(root);
+  const gitMissing = (git.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+  if ((git.error || git.status === null) && !gitMissing) return { files, limited: true };
+  if (git.status === 0) {
+    for (const path of git.stdout.split("\0")) {
+      if (exhausted()) break;
+      visited += 1;
+      admit(posix(path));
+    }
+  } else {
+    const walk = (directory: string, depth: number): void => {
+      if (exhausted()) return;
+      let handle;
+      try { handle = opendirSync(directory); } catch { return; }
+      try {
+        while (!exhausted()) {
+          const entry = handle.readSync();
+          if (!entry) break;
+          visited += 1;
+          if (entry.isSymbolicLink()) continue;
+          const absolute = join(directory, entry.name);
+          const rel = posix(relative(root, absolute));
+          if (!acceptable(rel)) continue;
+          if (entry.isDirectory()) {
+            if (depth >= limits.depth) { limited = true; continue; }
+            walk(absolute, depth + 1);
+          } else if (entry.isFile()) admit(rel);
+        }
+      } catch { /* permission errors remain nonfatal */ }
+      finally { handle.closeSync(); }
     };
-    walk(root);
+    walk(root, 0);
   }
-  return [...new Set(files)]
-    .filter((path) => path && !path.startsWith("../") && acceptable(path))
-    .filter((path) => !isProbablyBinary(join(root, path)))
-    .sort((a, b) => a.localeCompare(b));
+  return { files: [...new Set(files)].sort((a, b) => a.localeCompare(b)), limited };
 }
 
 function compactType(text: string | undefined, fallback = "unknown"): string {
@@ -250,7 +320,11 @@ function compactTree(paths: readonly string[]): TreeLine[] {
 function packageEntries(root: string): Set<string> {
   const result = new Set<string>();
   try {
-    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as Record<string, unknown>;
+    const path = join(root, "package.json");
+    if (!lstatSync(path).isFile()) return result;
+    const text = readRepoMapPrefix(path, 64 * 1024 + 1);
+    if (text.length > 64 * 1024) return result;
+    const pkg = JSON.parse(text.toString("utf8")) as Record<string, unknown>;
     const collect = (value: unknown): void => {
       if (typeof value === "string") result.add(posix(value).replace(/^\.\//, ""));
       else if (Array.isArray(value)) value.forEach(collect);
@@ -267,19 +341,39 @@ function omissionLine(files: number, symbols: number): string {
 
 export function generateRepoMap(options: RepoMapOptions): RepoMapResult {
   const root = resolve(options.workspaceRoot);
+  if (isBroadWorkspace(root, options.homeDirectory)) {
+    return { text: "", estimatedTokens: 0, includedFiles: 0, omittedFiles: 0, includedSymbols: 0, omittedSymbols: 0 };
+  }
+  const limits = { ...DEFAULT_LIMITS };
+  for (const key of Object.keys(limits) as Array<keyof RepoMapLimits>) {
+    const value = options.limits?.[key];
+    if (value !== undefined && Number.isFinite(value)) limits[key] = Math.max(0, Math.floor(value));
+  }
   const requested = options.maxTokens ?? Number(process.env.REPO_MAP_MAX_TOKENS || 1_000);
   const maxTokens = Number.isFinite(requested) ? Math.max(32, Math.floor(requested)) : 1_000;
   try {
-    const files = discoverFiles(root);
+    const discovery = discoverFiles(root, limits, options);
+    const files = discovery.files;
+    let limited = discovery.limited;
     const sourcePaths = files.filter((path) => SOURCE_EXTENSIONS.has(extname(path).toLowerCase()));
-    const tsconfig = join(root, "tsconfig.json");
+    // Explicit in-memory inputs prevent tsconfig/import resolution from escaping budgets.
     const project = new Project({
-      ...(existsSync(tsconfig) ? { tsConfigFilePath: tsconfig, skipAddingFilesFromTsConfig: true } : {}),
+      useInMemoryFileSystem: true,
       compilerOptions: { allowJs: true, checkJs: false },
       skipFileDependencyResolution: true,
     });
+    let sourceCount = 0;
+    let sourceBytes = 0;
     for (const path of sourcePaths) {
-      try { project.addSourceFileAtPath(join(root, path)); } catch { /* malformed/unreadable sources remain in the tree */ }
+      if (sourceCount >= limits.sourceFiles || sourceBytes >= limits.totalSourceBytes) { limited = true; break; }
+      try {
+        const cap = Math.min(limits.sourceBytes, limits.totalSourceBytes - sourceBytes);
+        const text = readRepoMapPrefix(join(root, path), cap + 1);
+        sourceBytes += text.length;
+        sourceCount += 1;
+        if (text.length > cap) { limited = true; continue; }
+        project.createSourceFile(join(root, path), text.toString("utf8"));
+      } catch { /* malformed/unreadable sources remain in the tree */ }
     }
 
     const sourceFiles = project.getSourceFiles();
@@ -351,6 +445,7 @@ export function generateRepoMap(options: RepoMapOptions): RepoMapResult {
         lines.push("");
       }
       if (noticeFiles || noticeSymbols) lines.push(omissionLine(noticeFiles, noticeSymbols));
+      if (limited) lines.push("... map truncated by scan limits");
       lines.push("</repo_map>");
       return lines.join("\n");
     };
@@ -377,7 +472,7 @@ export function generateRepoMap(options: RepoMapOptions): RepoMapResult {
       text = render(totalSourceFiles - includedFiles, totalSymbols - includedSymbols);
     }
     if (estimateRepoMapTokens(text) > maxTokens) {
-      text = `<repo_map>\n... ${totalSymbols - includedSymbols} symbols omitted\n</repo_map>`;
+      text = limited ? "<repo_map>\n... map truncated by scan limits\n</repo_map>" : `<repo_map>\n... ${totalSymbols - includedSymbols} symbols omitted\n</repo_map>`;
     }
     return {
       text,

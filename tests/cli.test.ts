@@ -76,3 +76,42 @@ describe("rwa CLI", () => {
     });
   });
 });
+
+test("home startup shows the skipped-map notice", async () => {
+  const home = join(root, "home");
+  await mkdir(home);
+  const result = await invoke([home, "--no-tui"]);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain("Automatic repository mapping is disabled");
+});
+
+test("fatal prompt initialization restores the UI before CLI reporting", async () => {
+  // Keep module mocks and forced TTY properties in a subprocess, isolated from
+  // the rest of the suite. No terminal or live credentials are needed.
+  const program = `
+    import { mock } from "bun:test";
+    Object.defineProperty(process.stdin, "isTTY", { value: true });
+    Object.defineProperty(process.stdout, "isTTY", { value: true });
+    process.stderr.write = (text) => process.stdout.write(text);
+    mock.module(${JSON.stringify(resolve(import.meta.dir, "../source/ui/tui-app.ts"))}, () => ({
+      TuiApp: class {
+        setConversation() {}
+        append() {}
+        close() { process.stdout.write("UI RESTORED\\n"); }
+      }
+    }));
+    mock.module(${JSON.stringify(resolve(import.meta.dir, "../source/agent/session-prompt.ts"))}, () => ({
+      SessionPrompt: class { constructor() { throw new Error("Prompt initialization failed"); } }
+    }));
+    const { runCli } = await import(${JSON.stringify(cli)});
+    process.exitCode = await runCli([]);
+  `;
+  const child = Bun.spawn([process.execPath, "--eval", program], {
+    cwd: root,
+    env: { ...process.env, HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "config"), TERM: "xterm" },
+    stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const output = await new Response(child.stdout).text();
+  expect(await child.exited).toBe(1);
+  expect(output).toContain("UI RESTORED\nrwa: Prompt initialization failed\n");
+});

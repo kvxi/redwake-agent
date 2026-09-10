@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { runRepl } from "../source/main.ts";
 import { TuiApp } from "../source/ui/tui-app.ts";
 import type { Frame } from "../source/ui/layout.ts";
 import { NEW_SESSION } from "../source/session/sessions-ui.ts";
@@ -248,4 +249,27 @@ test("TUI app translates progress and runtime identity state", () => {
   expect(app.state.identity).toMatchObject({ model: "new", eventCount: 4 });
   app.close(); app.close();
   expect(screen.disposed).toBe(true);
+});
+
+test("invalid onboarding input keeps feedback visible and requests another provider", async () => {
+  const screen = new FakeScreen();
+  screen.columns = 100;
+  screen.rows = 30;
+  const app = new TuiApp({ identity: { provider: "anthropic", model: "model", cwd: "/tmp", sessionName: "new", eventCount: 0 }, screen, color: false });
+  const repl = runRepl({
+    provider: "anthropic", onboarding: true, modelFor: () => "model",
+    createAgent: () => { throw new Error("Should not create an agent"); },
+  }, app);
+  try {
+    app.handleKey("invalid", { sequence: "invalid" });
+    app.handleKey("", { name: "return" });
+    await Bun.sleep(0);
+    expect(screen.disposed).toBe(false);
+    expect(app.state.input.active).toBe(true);
+    expect(app.state.input.label).toStartWith("Provider [");
+    expect(screen.frames.at(-1)?.lines.join("\n")).toContain("Invalid provider.");
+    app.handleKey("", { name: "return" });
+    await repl;
+    expect(screen.disposed).toBe(true);
+  } finally { app.close(); }
 });
